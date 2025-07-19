@@ -65,7 +65,11 @@ defmodule SmartSort.MixProject do
       {:broadway_cloud_pub_sub, "~> 0.9"},
       {:google_api_gmail, "~> 0.17"},
       {:goth, "~> 1.4"},
-      {:oban, "~> 2.19"}
+      {:oban, "~> 2.19"},
+      {:timex, "~> 3.7"},
+      {:instructor, "~> 0.1.0"},
+      {:scrivener_ecto, "~> 2.7"},
+      {:html_sanitize_ex, "~> 1.4"}
     ]
   end
 

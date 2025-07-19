@@ -23,7 +23,7 @@ defmodule SmartSortWeb.DashboardComponents do
           <.connected_account_card account={account} />
         <% end %>
 
-        <.add_account_button />
+        <.action_button click="connect_gmail_account" label="Connect Another Gmail Account" />
       </div>
     </div>
     """
@@ -61,7 +61,7 @@ defmodule SmartSortWeb.DashboardComponents do
         <%= if @show_form do %>
           <.category_form form={@category_form} />
         <% else %>
-          <.add_category_button />
+          <.action_button click="show_category_form" label="Add New Category" />
         <% end %>
       </div>
     </div>
@@ -116,25 +116,6 @@ defmodule SmartSortWeb.DashboardComponents do
     """
   end
 
-  defp add_account_button(assigns) do
-    ~H"""
-    <button
-      phx-click="connect_gmail_account"
-      class="w-full flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-sm font-medium text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
-    >
-      <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-        />
-      </svg>
-      Connect Another Gmail Account
-    </button>
-    """
-  end
-
   defp empty_categories_state(assigns) do
     ~H"""
     <div class="text-center py-12">
@@ -163,51 +144,56 @@ defmodule SmartSortWeb.DashboardComponents do
 
   defp categories_list(assigns) do
     ~H"""
-    <div class="space-y-3">
-      <%= for {_idx, category} <- @categories do %>
-        <.category_card category={category} />
+    <div id="categories" phx-update="stream" class="space-y-3">
+      <%= for {idx, category} <- @categories do %>
+        <.category_card id={idx} category={category} />
       <% end %>
     </div>
     """
   end
 
+  attr :id, :string
   attr :category, :map, required: true
 
   defp category_card(assigns) do
     ~H"""
-    <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
-      <div class="flex items-center space-x-4">
-        <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
-          <span class="text-white font-medium text-sm">
-            {String.first(@category.name) |> String.upcase()}
-          </span>
-        </div>
-        <div>
-          <h3 class="text-sm font-medium text-gray-900">{@category.name}</h3>
-          <p class="text-sm text-gray-500">{@category.description}</p>
-        </div>
-      </div>
+    <div id={@id} class="group">
+      <.link navigate={~p"/categories/#{@category.id}/emails"}>
+        <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+          <div class="flex items-center space-x-4">
+            <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
+              <span class="text-white font-medium text-sm">
+                {String.first(@category.name) |> String.upcase()}
+              </span>
+            </div>
+            <div>
+              <h3 class="text-sm font-medium text-gray-900">{@category.name}</h3>
+              <p class="text-sm text-gray-500">{@category.description}</p>
+            </div>
+          </div>
 
-      <div class="flex items-center space-x-3">
-        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-          {@category.email_count} emails
-        </span>
-        <button
-          phx-click="delete_category"
-          phx-value-id={@category.id}
-          class="text-gray-400 hover:text-red-500 transition-colors"
-          onclick="return confirm('Are you sure you want to delete this category?')"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-            />
-          </svg>
-        </button>
-      </div>
+          <div class="flex items-center space-x-3">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+              {@category.email_count} emails
+            </span>
+            <button
+              phx-click="delete_category"
+              phx-value-id={@category.id}
+              class="text-gray-400 hover:text-red-500 transition-colors"
+              onclick="return confirm('Are you sure you want to delete this category?')"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </.link>
     </div>
     """
   end
@@ -216,7 +202,7 @@ defmodule SmartSortWeb.DashboardComponents do
 
   defp category_form(assigns) do
     ~H"""
-    <.form for={@form} phx-change="validate_category" phx-submit="create_category" class="space-y-4">
+    <.form for={@form} phx-change="validate_category" phx-submit="create_category" class="mt-4 space-y-4">
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-2">
           Category Name
@@ -271,13 +257,13 @@ defmodule SmartSortWeb.DashboardComponents do
     """
   end
 
-  defp add_category_button(assigns) do
+  defp action_button(assigns) do
     ~H"""
     <button
-      phx-click="show_category_form"
-      class="w-full flex items-center justify-center px-4 py-2 border-2 border-dashed border-gray-300 rounded-lg text-base font-medium text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
+      phx-click={@click}
+      class="w-full mt-4 flex items-center justify-center px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-base font-medium text-gray-600 hover:border-gray-400 hover:text-gray-700 transition-colors"
     >
-      <svg class="w-8 h-8 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
           stroke-linecap="round"
           stroke-linejoin="round"
@@ -285,7 +271,7 @@ defmodule SmartSortWeb.DashboardComponents do
           d="M12 6v6m0 0v6m0-6h6m-6 0H6"
         />
       </svg>
-      Add New Category
+      <%= @label %>
     </button>
     """
   end

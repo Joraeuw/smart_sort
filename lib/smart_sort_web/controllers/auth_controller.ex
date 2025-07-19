@@ -68,8 +68,7 @@ defmodule SmartSortWeb.AuthController do
   defp handle_add_account_flow(conn, auth, existing_user_id) do
     with {:ok, existing_user} <- User.get(existing_user_id),
          {:ok, connected_account} <-
-           Accounts.add_email_account_to_existing_user(existing_user, auth)
-           |> IO.inspect(label: "really") do
+           Accounts.add_email_account_to_existing_user(existing_user, auth) do
       start_gmail_watching_for_account(connected_account)
 
       conn

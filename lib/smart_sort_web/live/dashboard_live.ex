@@ -5,6 +5,7 @@ defmodule SmartSortWeb.DashboardLive do
 
   alias SmartSortWeb.DashboardComponents
 
+  @impl true
   def render(assigns) do
     ~H"""
     <div class="min-h-screen bg-gray-50">
@@ -36,7 +37,7 @@ defmodule SmartSortWeb.DashboardLive do
           </div>
         </div>
       </header>
-      
+
     <!-- Main Content -->
       <main class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <div class="space-y-8">
@@ -57,22 +58,27 @@ defmodule SmartSortWeb.DashboardLive do
     """
   end
 
+  @impl true
   def mount(_params, session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(SmartSort.PubSub, "update:categories")
+    end
+
     user = get_user_from_session(session)
 
     socket =
       socket
       |> assign(:user, user)
-      |> assign(:page_title, "Dashboard")
-      |> assign(:categories_count, length(user.categories))
-      |> stream(:categories, user.categories)
       |> assign(:connected_accounts, SmartSort.Accounts.get_user_connected_accounts(user.id))
+      |> assign(:categories_count, length(user.categories))
       |> assign(:show_category_form, false)
       |> assign(:category_form, to_form(Category.changeset(%Category{})))
+      |> stream(:categories, user.categories)
 
     {:ok, socket}
   end
 
+  @impl true
   def handle_event("show_category_form", _params, socket) do
     {:noreply, assign(socket, :show_category_form, true)}
   end
@@ -111,6 +117,7 @@ defmodule SmartSortWeb.DashboardLive do
 
   def handle_event("delete_category", %{"id" => id}, socket) do
     category = Category.get!(id)
+    {:ok, _category} = Category.delete(id)
 
     {:noreply,
      socket
@@ -132,5 +139,10 @@ defmodule SmartSortWeb.DashboardLive do
       nil -> nil
       user_id -> User.get!(user_id, [:categories])
     end
+  end
+
+  @impl true
+  def handle_info({:category_updated, updated_category}, socket) do
+    {:noreply, stream_insert(socket, :categories, updated_category)}
   end
 end

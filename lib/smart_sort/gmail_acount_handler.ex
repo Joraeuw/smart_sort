@@ -1,5 +1,8 @@
 defmodule SmartSort.GmailAccountHandler do
   require Logger
+  alias SmartSort.AI.EmailProcessor
+  alias SmartSort.Accounts.Category
+  alias SmartSort.Accounts.Email
   alias SmartSort.Helpers.PersistEnv
   alias SmartSort.Accounts.ConnectedAccount
 
@@ -182,13 +185,21 @@ defmodule SmartSort.GmailAccountHandler do
   end
 
   defp fetch_message_content(conn, acc, message_id) do
-    case GoogleApi.Gmail.V1.Api.Users.gmail_users_messages_get(conn, "me", message_id) do
+    case GoogleApi.Gmail.V1.Api.Users.gmail_users_messages_get(conn, "me", message_id,
+           format: "full"
+         ) do
       {:ok, message} ->
         email_data = extract_email_data(message)
         Logger.info("New email received for #{acc.email}: #{email_data.subject}")
         Logger.debug("Email details for #{acc.email}", email_data: email_data)
-
         handle_new_email(acc, email_data)
+
+      {:error, %Tesla.Env{status: 404}} ->
+        Logger.warning(
+          "Gmail message #{message_id} for #{acc.email} not found (may have been deleted or moved)"
+        )
+
+        :not_found
 
       {:error, reason} ->
         Logger.error(
@@ -199,6 +210,7 @@ defmodule SmartSort.GmailAccountHandler do
 
   defp extract_email_data(message) do
     headers = get_headers(message)
+    body_data = extract_email_body(message.payload)
 
     %{
       id: message.id,
@@ -208,8 +220,78 @@ defmodule SmartSort.GmailAccountHandler do
       to: get_header_value(headers, "To"),
       date: get_header_value(headers, "Date"),
       snippet: message.snippet,
+      body: body_data.content,
+      body_type: body_data.type,
       labels: message.labelIds || []
     }
+  end
+
+  defp extract_email_body(payload) do
+    extract_body_from_parts([payload])
+  end
+
+  defp extract_body_from_parts(parts) do
+    {plain_text, html_content} =
+      parts
+      |> Enum.reduce({nil, nil}, fn part, {plain_acc, html_acc} ->
+        case part do
+          %{mimeType: "text/plain", body: %{data: data}} ->
+            decoded = decode_gmail_body_data(data)
+            {decoded || plain_acc, html_acc}
+
+          %{mimeType: "text/html", body: %{data: data}} ->
+            decoded = decode_gmail_body_data(data)
+            {plain_acc, decoded || html_acc}
+
+          %{parts: subparts} when is_list(subparts) ->
+            sub_result = extract_body_from_parts(subparts)
+
+            case sub_result do
+              %{type: "text/plain", content: content} ->
+                {content || plain_acc, html_acc}
+
+              %{type: "text/html", content: content} ->
+                {plain_acc, content || html_acc}
+
+              _ ->
+                {plain_acc, html_acc}
+            end
+
+          _ ->
+            {plain_acc, html_acc}
+        end
+      end)
+
+    cond do
+      not is_nil(html_content) -> %{type: "text/html", content: html_content}
+      not is_nil(plain_text) -> %{type: "text/plain", content: plain_text}
+      true -> %{type: "text/plain", content: ""}
+    end
+  end
+
+  defp decode_gmail_body_data(data) when is_binary(data) do
+    data
+    |> String.replace("-", "+")
+    |> String.replace("_", "/")
+    |> pad_base64()
+    |> Base.decode64()
+    |> case do
+      {:ok, binary} -> handle_encoding(binary)
+      _ -> nil
+    end
+  end
+
+  defp decode_gmail_body_data(_), do: nil
+
+  defp pad_base64(data) do
+    rem = rem(String.length(data), 4)
+    if rem == 0, do: data, else: data <> String.duplicate("=", 4 - rem)
+  end
+
+  defp handle_encoding(binary) do
+    if String.valid?(binary),
+      do: binary,
+      else: :unicode.characters_to_binary(binary, :latin1, :utf8)
   end
 
   defp get_headers(%{payload: %{headers: headers}}) when is_list(headers), do: headers
@@ -222,12 +304,59 @@ defmodule SmartSort.GmailAccountHandler do
     end
   end
 
-  defp handle_new_email(_acc, email_data) do
-    IO.inspect(email_data)
+  defp handle_new_email(connected_account, email_data) do
+    %{
+      id: gmail_id,
+      date: date_string,
+      snippet: snippet,
+      labels: labels,
+      to: to,
+      from: from,
+      subject: subject,
+      thread_id: thread_id,
+      body: body
+    } = email_data
 
-    # TODO: PROCESS EMAILS
-    # - Store in database
-    # - Run AI analysis
+    {from_email, from_name} = parse_email_address(from)
+    {to_email, _} = parse_email_address(to)
+
+    params = %{
+      gmail_id: gmail_id,
+      thread_id: thread_id,
+      subject: subject,
+      body: body,
+      from_email: from_email,
+      from_name: from_name,
+      to_email: to_email,
+      snippet: snippet,
+      received_at: parse_email_date(date_string),
+      is_read: not Enum.member?(labels, "UNREAD"),
+      is_archived: false,
+      user_id: connected_account.user_id,
+      connected_account_id: connected_account.id
+    }
+
+    with {:ok, email} <- Email.create(params) do
+      categories = Category.get_all_by(%{user_id: connected_account.user_id})
+      Task.start(fn -> EmailProcessor.process_email(email, categories) end)
+    end
+  end
+
+  defp parse_email_address(email_string) do
+    case Regex.run(~r/^(.+?)\s*<(.+?)>$/, email_string) do
+      [_, name, email] -> {String.trim(email), String.trim(name)}
+      nil -> {String.trim(email_string), nil}
+    end
+  end
+
+  defp parse_email_date(date_string) do
+    case Timex.parse(date_string, "{RFC1123}") do
+      {:ok, datetime} ->
+        Timex.to_datetime(datetime, "UTC")
+
+      {:error, _} ->
+        DateTime.utc_now()
+    end
   end
 
   defp update_last_history_id(acc, history_id) do

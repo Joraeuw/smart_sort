@@ -27,9 +27,19 @@ defmodule SmartSort.Accounts.Category do
     |> unique_constraint([:user_id, :name], message: "You already have a category with this name")
   end
 
-  def update_email_count_changeset(category, email_count) do
+  def increment_email_count(category_id) do
+    category = get!(category_id)
+
     category
-    |> cast(%{email_count: email_count}, [:email_count])
-    |> validate_number(:email_count, greater_than_or_equal_to: 0)
+    |> Ecto.Changeset.change(email_count: category.email_count + 1)
+    |> SmartSort.Repo.update()
+  end
+
+  def decrement_email_count(category_id) do
+    category = get!(category_id)
+
+    category
+    |> Ecto.Changeset.change(email_count: category.email_count - 1)
+    |> SmartSort.Repo.update()
   end
 end
