@@ -44,6 +44,8 @@ defmodule SmartSortWeb.Router do
     pipe_through [:require_authenticated_user]
 
     live "/dashboard", DashboardLive
+    live "/categories/:category_id/emails", EmailsLive
+
     get "/logout", AuthController, :logout_user
   end
 
