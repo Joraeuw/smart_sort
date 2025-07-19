@@ -1,5 +1,4 @@
 defmodule SmartSortWeb.DashboardLive do
-  alias SmartSort.Accounts
   alias SmartSort.Accounts.Category
   alias SmartSort.Accounts.User
   use SmartSortWeb, :live_view
@@ -95,7 +94,7 @@ defmodule SmartSortWeb.DashboardLive do
   end
 
   def handle_event("create_category", %{"category" => category_params}, socket) do
-    case Accounts.create_category(Map.put(category_params, "user_id", socket.assigns.user.id)) do
+    case Category.create(Map.put(category_params, "user_id", socket.assigns.user.id)) do
       {:ok, category} ->
         {:noreply,
          socket

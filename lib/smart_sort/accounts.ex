@@ -1,7 +1,6 @@
 defmodule SmartSort.Accounts do
   import Ecto.Query, warn: false
   alias SmartSort.Macros.NotFound
-  alias SmartSort.Accounts.Category
   alias SmartSort.Repo
   alias SmartSort.Accounts.{User, ConnectedAccount}
 
