@@ -99,6 +99,11 @@ config :smart_sort, Oban,
     renew_gmail_watches: 2
   ]
 
+config :wallaby,
+  driver: Wallaby.Chrome,
+  screenshot_dir: "screenshots/wallaby",
+  hackney_options: [timeout: 60_000, recv_timeout: 60_000]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

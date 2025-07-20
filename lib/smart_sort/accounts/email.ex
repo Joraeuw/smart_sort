@@ -24,7 +24,13 @@ defmodule SmartSort.Accounts.Email do
     :confidence_score,
     :is_archived,
     :category_id,
-    :is_read
+    :is_read,
+    :body_type,
+    :unsubscribe_status,
+    :unsubscribe_attempted_at,
+    :unsubscribe_completed_at,
+    :unsubscribe_details,
+    :is_selected
     | @required_params
   ]
 
@@ -43,6 +49,11 @@ defmodule SmartSort.Accounts.Email do
     field :received_at, :utc_datetime
     field :is_archived, :boolean, default: false
     field :is_read, :boolean, default: false
+    field :unsubscribe_status, :string
+    field :unsubscribe_attempted_at, :utc_datetime
+    field :unsubscribe_completed_at, :utc_datetime
+    field :unsubscribe_details, :string
+    field :is_selected, :boolean, virtual: true, default: false
 
     belongs_to :user, User
     belongs_to :connected_account, ConnectedAccount
@@ -66,16 +77,27 @@ defmodule SmartSort.Accounts.Email do
     )
   end
 
-  def update(email, attrs, preloads \\ []) do
-    result = super(email, attrs, preloads)
+  def assign_to_category(email, category_id, ai_summary, confidence_score) do
+    result =
+      __MODULE__.update(
+        email,
+        %{
+          category_id: category_id,
+          ai_summary: ai_summary,
+          confidence_score: confidence_score
+        }
+      )
 
     case result do
-      {:ok, %__MODULE__{category_id: category_id}} ->
-        broadcast_category_update(category_id, :inc)
-        result
+      {:ok, updated_email} ->
+        if not is_nil(category_id) do
+          broadcast_category_update(category_id, :inc)
+        end
 
-      _ ->
-        result
+        {:ok, updated_email}
+
+      error ->
+        error
     end
   end
 
@@ -83,8 +105,11 @@ defmodule SmartSort.Accounts.Email do
     result = super(email, preloads)
 
     case result do
-      {:ok, %__MODULE__{category_id: category_id}} ->
+      {:ok, %__MODULE__{category_id: category_id}} when not is_nil(category_id) ->
         broadcast_category_update(category_id, :dec)
+        result
+
+      {:ok, _email} ->
         result
 
       _ ->
@@ -301,6 +326,51 @@ defmodule SmartSort.Accounts.Email do
       error ->
         error
     end
+  end
+
+  @doc """
+  Sets the unsubscribe status to processing
+  """
+  def start_unsubscribe(email) do
+    attrs = %{
+      unsubscribe_status: "processing",
+      unsubscribe_attempted_at: DateTime.utc_now()
+    }
+
+    __MODULE__.update(email, attrs)
+  end
+
+  @doc """
+  Sets the unsubscribe status to success with details
+  """
+  def complete_unsubscribe_success(email, details \\ "") do
+    attrs = %{
+      unsubscribe_status: "success",
+      unsubscribe_completed_at: DateTime.utc_now(),
+      unsubscribe_details: details
+    }
+
+    __MODULE__.update(email, attrs)
+  end
+
+  @doc """
+  Sets the unsubscribe status to failed with details
+  """
+  def complete_unsubscribe_failure(email, details \\ "") do
+    attrs = %{
+      unsubscribe_status: "failed",
+      unsubscribe_completed_at: DateTime.utc_now(),
+      unsubscribe_details: details
+    }
+
+    __MODULE__.update(email, attrs)
+  end
+
+  @doc """
+  Checks if unsubscribe is currently processing
+  """
+  def unsubscribe_processing?(email) do
+    email.unsubscribe_status == "processing"
   end
 
   defp broadcast_category_update(category_id, :inc) do

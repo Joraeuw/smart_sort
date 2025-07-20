@@ -26,6 +26,7 @@
         window.addEventListener("phx:set-theme", ({ detail: { theme } }) => setTheme(theme));
       })();
     </script>
+    <Layouts.flash_group flash={@flash} />
   </head>
   <body>
     {@inner_content}

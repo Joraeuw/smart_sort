@@ -9,7 +9,12 @@ defmodule SmartSortWeb.EmailComponents do
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
       <div id="emails" phx-update="stream" class="divide-y divide-gray-200">
         <%= for {id, email} <- @emails do %>
-          <.email_card id={id} email={email} selected={@selected_email && @selected_email.id == email.id} />
+          <.email_card
+            id={id}
+            email={email}
+            selected={@selected_email && @selected_email.id == email.id}
+            checked={email.is_selected || false}
+          />
         <% end %>
       </div>
     </div>
@@ -19,34 +24,86 @@ defmodule SmartSortWeb.EmailComponents do
   attr :id, :string, required: true
   attr :email, :map, required: true
   attr :selected, :boolean, default: false
+  attr :checked, :boolean, default: false
 
   def email_card(assigns) do
     ~H"""
     <div
       id={@id}
-      class={[
-        "p-4 hover:bg-gray-50 cursor-pointer transition-colors duration-150",
-        @selected && "bg-blue-50 border-l-4 border-blue-500",
-        !@email.is_read && "bg-blue-25"
-      ]}
       phx-click="select_email"
       phx-value-id={@email.id}
+      class={[
+        "p-6 hover:bg-gray-50 transition-all duration-300 group border-l-4 relative",
+        @selected && "bg-blue-50 border-l-blue-500 shadow-sm",
+        !@email.is_read && "bg-blue-25",
+        @checked && "bg-gradient-to-r from-blue-50/80 to-indigo-50/80 border-l-blue-500 shadow-lg ring-2 ring-blue-200/50",
+        !@checked && !@selected && "border-l-transparent hover:border-l-gray-200"
+      ]}
     >
-      <div class="flex items-start justify-between">
+      <!-- Selection indicator overlay -->
+      <%= if @checked do %>
+        <div class="absolute top-3 right-3 w-7 h-7 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-lg ring-2 ring-white transform transition-all duration-300 animate-in slide-in-from-top-1 fade-in-50">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+      <% end %>
+
+      <div class="flex items-start space-x-4">
+        <!-- Selection checkbox -->
+        <div class="flex-shrink-0 pt-1">
+          <div class="relative">
+            <input
+              type="checkbox"
+              checked={@checked}
+              phx-click="toggle_email_selection"
+              phx-value-id={@email.id}
+              class={[
+                "peer sr-only"
+              ]}
+            />
+            <label
+              for="checkbox-{@email.id}"
+              class={[
+                "relative flex items-center justify-center w-6 h-6 rounded-lg border-2 cursor-pointer transition-all duration-300 transform hover:scale-105",
+                "focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-1",
+                "before:content-[''] before:absolute before:inset-0 before:rounded-lg before:transition-all before:duration-300",
+                @checked && [
+                  "bg-gradient-to-br from-blue-500 to-blue-600 border-blue-600 shadow-lg",
+                  "before:bg-gradient-to-br before:from-blue-400 before:to-blue-500 before:opacity-0 hover:before:opacity-20"
+                ],
+                !@checked && [
+                  "border-gray-300 bg-white shadow-sm hover:border-blue-400 hover:bg-blue-50/50 hover:shadow-md",
+                  "before:bg-blue-500 before:opacity-0 hover:before:opacity-10"
+                ]
+              ]}
+              phx-click="toggle_email_selection"
+              phx-value-id={@email.id}
+            >
+              <%= if @checked do %>
+                <svg class="w-4 h-4 text-white drop-shadow-sm transform transition-all duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                </svg>
+              <% end %>
+            </label>
+          </div>
+        </div>
+
+        <!-- Email content -->
         <div class="flex-1 min-w-0">
-          <div class="flex items-center space-x-3 mb-2">
+          <div class="flex items-center space-x-3 mb-3">
             <!-- Read/Unread indicator -->
             <div class={[
-              "w-2 h-2 rounded-full flex-shrink-0",
+              "w-3 h-3 rounded-full flex-shrink-0 shadow-sm transition-all duration-200",
               @email.is_read && "bg-gray-300",
-              !@email.is_read && "bg-blue-500"
+              !@email.is_read && "bg-gradient-to-r from-blue-500 to-indigo-500 animate-pulse shadow-blue-200"
             ]}>
             </div>
 
             <!-- Sender info -->
-            <div class="flex items-center space-x-2 flex-1 min-w-0">
-              <div class="w-8 h-8 bg-gradient-to-r from-gray-500 to-gray-600 rounded-full flex items-center justify-center flex-shrink-0">
-                <span class="text-white text-xs font-medium">
+            <div class="flex items-center space-x-3 flex-1 min-w-0">
+              <div class="w-9 h-9 bg-gradient-to-br from-gray-500 to-gray-700 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ring-2 ring-white group-hover:shadow-md transition-all duration-200">
+                <span class="text-white text-sm font-semibold">
                   {get_sender_initials(@email)}
                 </span>
               </div>
@@ -69,11 +126,13 @@ defmodule SmartSortWeb.EmailComponents do
           </div>
 
           <!-- Subject -->
-          <h3 class={[
-            "text-sm mb-1 truncate",
-            @email.is_read && "text-gray-700",
-            !@email.is_read && "text-gray-900 font-medium"
-          ]}>
+          <h3
+            class={[
+              "text-sm mb-1 truncate cursor-pointer hover:text-blue-600",
+              @email.is_read && "text-gray-700",
+              !@email.is_read && "text-gray-900 font-medium"
+            ]}
+          >
             {@email.subject || "(No subject)"}
           </h3>
 
@@ -99,15 +158,24 @@ defmodule SmartSortWeb.EmailComponents do
                   Archived
                 </span>
               <% end %>
+
+              <%= if @email.unsubscribe_status do %>
+                <span class={[
+                  "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold shadow-sm border",
+                  get_unsubscribe_status_classes(@email.unsubscribe_status)
+                ]}>
+                  {get_unsubscribe_status_text(@email.unsubscribe_status)}
+                </span>
+              <% end %>
             </div>
 
             <!-- Quick actions -->
-            <div class="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div class="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-all duration-300">
               <%= if @email.is_read do %>
                 <button
                   phx-click="mark_as_unread"
                   phx-value-id={@email.id}
-                  class="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                  class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200 hover:shadow-sm"
                   title="Mark as unread"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -118,7 +186,7 @@ defmodule SmartSortWeb.EmailComponents do
                 <button
                   phx-click="mark_as_read"
                   phx-value-id={@email.id}
-                  class="p-1 text-gray-400 hover:text-green-600 transition-colors"
+                  class="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-all duration-200 hover:shadow-sm"
                   title="Mark as read"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -139,17 +207,19 @@ defmodule SmartSortWeb.EmailComponents do
 
   def email_detail_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-50 overflow-y-auto">
-      <div class="flex min-h-screen items-center justify-center p-4">
         <!-- Backdrop -->
-        <div phx-click="close_email_detail" class="fixed inset-0 z-40 bg-gray-100 bg-opacity-50"></div>
-
-        <!-- Modal -->
-        <div
-          class="relative bg-white z-50 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
-        >
+    <div
+      phx-click="close_email_detail"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style="background-color: rgba(0, 0, 0, 0.5);"
+    >
+      <!-- Modal -->
+      <div
+        phx-click={JS.dispatch("phx:stop")}
+        class="relative bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+      >
           <!-- Header -->
-          <div class="flex items-center justify-between p-6 border-b border-gray-200">
+          <div class="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
             <div class="flex items-center space-x-3">
               <div class="w-10 h-10 bg-gradient-to-r from-gray-500 to-gray-600 rounded-full flex items-center justify-center">
                 <span class="text-white text-sm font-medium">
@@ -177,7 +247,7 @@ defmodule SmartSortWeb.EmailComponents do
           </div>
 
           <!-- Email metadata -->
-          <div class="px-6 py-4 border-b border-gray-100 bg-gray-50">
+          <div class="px-6 py-4 border-b border-gray-100 bg-gray-50 flex-shrink-0">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <span class="font-medium text-gray-700">From:</span>
@@ -207,7 +277,7 @@ defmodule SmartSortWeb.EmailComponents do
 
           <!-- AI Summary (if available) -->
           <%= if @email.ai_summary do %>
-            <div class="px-6 py-4 border-b border-gray-100 bg-purple-50">
+            <div class="px-6 py-4 border-b border-gray-100 bg-purple-50 flex-shrink-0">
               <div class="flex items-start space-x-3">
                 <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
                   <svg class="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -223,14 +293,16 @@ defmodule SmartSortWeb.EmailComponents do
           <% end %>
 
           <!-- Email content -->
-          <div class="flex-1 overflow-y-auto p-6">
-            <div class="email-body-container">
-              <%= render_email_body(@email) %>
+          <div class="flex-1 overflow-y-auto min-h-0">
+            <div class="p-6">
+              <div class="email-body-container max-h-full">
+                <%= render_email_body(@email) %>
+              </div>
             </div>
           </div>
 
           <!-- Actions -->
-          <div class="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
+          <div class="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 flex-shrink-0">
             <div class="flex items-center space-x-3">
               <%= if @email.is_read do %>
                 <button
@@ -250,20 +322,27 @@ defmodule SmartSortWeb.EmailComponents do
                 </button>
               <% end %>
 
-              <!-- Toggle between full body and snippet -->
-              <%= if has_full_body?(@email) do %>
-                <button
-                  phx-click="toggle_email_view"
-                  phx-value-id={@email.id}
-                  class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  <%= if true do %>
-                    Show snippet
-                  <% else %>
-                    Show full email
-                  <% end %>
-                </button>
-              <% end %>
+              <button
+                phx-click="unsubscribe_email"
+                phx-value-id={@email.id}
+                class={[
+                  "inline-flex items-center px-4 py-2.5 border shadow-sm text-sm font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 transform hover:scale-105",
+                  get_unsubscribe_button_classes(@email)
+                ]}
+                title={get_unsubscribe_button_title(@email)}
+                disabled={@email.unsubscribe_status == "processing"}
+              >
+                <%= if @email.unsubscribe_status == "processing" do %>
+                  <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Processing...
+                <% else %>
+                  <%= get_unsubscribe_button_text(@email) %>
+                <% end %>
+              </button>
+
             </div>
 
             <button
@@ -275,7 +354,6 @@ defmodule SmartSortWeb.EmailComponents do
           </div>
         </div>
       </div>
-    </div>
     """
   end
 
@@ -524,5 +602,65 @@ defmodule SmartSortWeb.EmailComponents do
     end_page = min(total_pages, current_page + 2)
 
     start_page..end_page |> Enum.to_list()
+  end
+
+  # Helper functions for unsubscribe button
+  defp get_unsubscribe_button_classes(email) do
+    case email.unsubscribe_status do
+      "processing" ->
+        "border-gray-300 text-gray-600 bg-gradient-to-r from-gray-50 to-gray-100 cursor-not-allowed focus:ring-gray-500 shadow-inner"
+
+      "success" ->
+        "border-green-400 text-green-700 bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-100 hover:to-emerald-100 focus:ring-green-500 shadow-green-100"
+
+      "failed" ->
+        "border-orange-400 text-orange-700 bg-gradient-to-r from-orange-50 to-red-50 hover:from-orange-100 hover:to-red-100 focus:ring-orange-500 shadow-orange-100"
+
+      _ ->
+        "border-red-400 text-red-700 bg-gradient-to-r from-white to-red-50 hover:from-red-50 hover:to-red-100 focus:ring-red-500 shadow-red-100"
+    end
+  end
+
+  defp get_unsubscribe_button_title(email) do
+    case email.unsubscribe_status do
+      "processing" -> "Unsubscribe in progress..."
+      "success" -> "Successfully unsubscribed"
+      "failed" -> "Unsubscribe failed - click to retry"
+      _ -> "Unsubscribe from this sender"
+    end
+  end
+
+  defp get_unsubscribe_button_text(email) do
+    case email.unsubscribe_status do
+      "success" -> "✓ Unsubscribed"
+      "failed" -> "↻ Retry Unsubscribe"
+      _ -> "Unsubscribe"
+    end
+  end
+
+  # Helper functions for status badges in email list
+  defp get_unsubscribe_status_classes(status) do
+    case status do
+      "processing" ->
+        "bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-800 border-yellow-300 shadow-yellow-100"
+
+      "success" ->
+        "bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 border-green-300 shadow-green-100"
+
+      "failed" ->
+        "bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border-red-300 shadow-red-100"
+
+      _ ->
+        "bg-gradient-to-r from-gray-100 to-slate-100 text-gray-800 border-gray-300 shadow-gray-100"
+    end
+  end
+
+  defp get_unsubscribe_status_text(status) do
+    case status do
+      "processing" -> "🔄 Unsubscribing"
+      "success" -> "✅ Unsubscribed"
+      "failed" -> "❌ Failed"
+      _ -> ""
+    end
   end
 end

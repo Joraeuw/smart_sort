@@ -69,7 +69,9 @@ defmodule SmartSort.MixProject do
       {:timex, "~> 3.7"},
       {:instructor, "~> 0.1.0"},
       {:scrivener_ecto, "~> 2.7"},
-      {:html_sanitize_ex, "~> 1.4"}
+      {:html_sanitize_ex, "~> 1.4"},
+      {:wallaby, "~> 0.30"},
+      {:reactor, "~> 0.15.6"}
     ]
   end
 
