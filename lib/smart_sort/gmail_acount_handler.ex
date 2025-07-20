@@ -5,6 +5,7 @@ defmodule SmartSort.GmailAccountHandler do
   alias SmartSort.Accounts.Email
   alias SmartSort.Helpers.PersistEnv
   alias SmartSort.Accounts.ConnectedAccount
+  alias SmartSort.Helpers.WithHelpers
 
   def start_gmail_notifications(%ConnectedAccount{} = account) do
     account = ensure_fresh_token(account)
@@ -399,10 +400,12 @@ defmodule SmartSort.GmailAccountHandler do
       connected_account_id: connected_account.id
     }
 
-    with {:ok, email} <- Email.create(params) do
+    with :ok <- WithHelpers.check(not Enum.member?(labels, "DRAFT"), :is_draft),
+         {:ok, email} <- Email.create(params) do
       categories = Category.get_all_by(%{user_id: connected_account.user_id})
 
       if not Enum.empty?(categories) do
+        archive_email_on_gmail(email)
         Task.start(fn -> EmailProcessor.process_email(email, categories) end)
       end
     end
@@ -475,6 +478,45 @@ defmodule SmartSort.GmailAccountHandler do
         end
 
         expires_soon
+    end
+  end
+
+  defp archive_email_on_gmail(%Email{} = email) do
+    case ConnectedAccount.get(email.connected_account_id) do
+      {:ok, account} ->
+        account = ensure_fresh_token(account)
+
+        conn = GoogleApi.Gmail.V1.Connection.new(account.access_token)
+
+        case GoogleApi.Gmail.V1.Api.Users.gmail_users_messages_modify(
+               conn,
+               "me",
+               email.gmail_id,
+               body: %GoogleApi.Gmail.V1.Model.ModifyMessageRequest{
+                 removeLabelIds: ["INBOX"]
+               }
+             ) do
+          {:ok, _response} ->
+            Logger.info(
+              "Successfully archived email #{email.gmail_id} in Gmail for #{account.email}"
+            )
+
+            {:ok, :archived}
+
+          {:error, reason} ->
+            Logger.error(
+              "Failed to archive email #{email.gmail_id} in Gmail for #{account.email}: #{inspect(reason)}"
+            )
+
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        Logger.error(
+          "Failed to get connected account #{email.connected_account_id} for archiving email: #{inspect(reason)}"
+        )
+
+        {:error, reason}
     end
   end
 end
