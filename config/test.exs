@@ -39,3 +39,9 @@ config :phoenix, :plug_init_mode, :runtime
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
+
+# Configure mocks for testing
+config :smart_sort,
+  gmail_account_handler: SmartSort.GmailAccountHandlerMock,
+  refresh_google_tokens: SmartSort.Jobs.RefreshGoogleTokensMock,
+  renew_gmail_watches: SmartSort.Jobs.RenewGmailWatchesMock

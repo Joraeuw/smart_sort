@@ -33,6 +33,12 @@ defmodule SmartSortWeb.ConnCase do
 
   setup tags do
     SmartSort.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+
+    {:ok,
+     conn:
+       Phoenix.ConnTest.build_conn()
+       |> Plug.Session.call(
+         Plug.Session.init(store: :cookie, key: "_smart_sort_key", signing_salt: "FWuVa76v")
+       )}
   end
 end

@@ -9,6 +9,9 @@ defmodule SmartSortWeb.GmailWebhookController do
       {:ok, %{"emailAddress" => email, "historyId" => history_id}} ->
         Task.start(fn -> process_gmail_change(email, history_id) end)
 
+      {:ok, _data} ->
+        Logger.error("Invalid Gmail notification format: missing required fields")
+
       {:error, reason} ->
         Logger.error("Failed to decode Gmail notification: #{inspect(reason)}")
     end
@@ -21,14 +24,17 @@ defmodule SmartSortWeb.GmailWebhookController do
     json(conn, %{status: "ok"})
   end
 
-  defp decode_gmail_data(base64_data) do
+  defp decode_gmail_data(base64_data) when is_binary(base64_data) do
     with {:ok, data} <- Base.decode64(base64_data),
          {:ok, data} <- Jason.decode(data) do
       {:ok, data}
     else
       {:error, reason} -> {:error, reason}
+      error -> {:error, error}
     end
   end
+
+  defp decode_gmail_data(_), do: {:error, :invalid_data}
 
   defp process_gmail_change(email, history_id) do
     case ConnectedAccount.get_by(%{email: email}, [:user]) do

@@ -110,24 +110,29 @@ defmodule SmartSort.Accounts do
         avatar: auth.info.image
       }
 
-      {:ok, user} = User.create(user_attrs)
+      case User.create(user_attrs) do
+        {:ok, user} ->
+          account_attrs = %{
+            email: auth.info.email,
+            provider: "google",
+            provider_id: auth.uid,
+            access_token: auth.credentials.token,
+            refresh_token: auth.credentials.refresh_token,
+            is_primary: true
+          }
 
-      account_attrs = %{
-        email: auth.info.email,
-        provider: "google",
-        provider_id: auth.uid,
-        access_token: auth.credentials.token,
-        refresh_token: auth.credentials.refresh_token,
-        is_primary: true
-      }
+          case create_connected_account(user, account_attrs) do
+            {:ok, connected_account} -> {:ok, user, connected_account}
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
-      {:ok, connected_account} = create_connected_account(user, account_attrs)
-
-      {:ok, user, connected_account}
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
     end)
     |> case do
       {:ok, response} -> response
-      error -> error
+      {:error, reason} -> {:error, reason}
     end
   end
 

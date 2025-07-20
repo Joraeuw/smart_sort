@@ -71,7 +71,8 @@ defmodule SmartSort.MixProject do
       {:scrivener_ecto, "~> 2.7"},
       {:html_sanitize_ex, "~> 1.4"},
       {:wallaby, "~> 0.30"},
-      {:reactor, "~> 0.15.6"}
+      {:reactor, "~> 0.15.6"},
+      {:mox, "~> 1.1", only: :test}
     ]
   end
 

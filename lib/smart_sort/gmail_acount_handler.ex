@@ -1,4 +1,6 @@
 defmodule SmartSort.GmailAccountHandler do
+  @behaviour SmartSort.GmailAccountHandlerBehaviour
+
   require Logger
   alias SmartSort.AI.EmailProcessor
   alias SmartSort.Accounts.Category
