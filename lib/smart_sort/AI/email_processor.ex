@@ -39,15 +39,11 @@ defmodule SmartSort.AI.EmailProcessor do
             confidence_score: confidence_score
           }} <- do_perform(email, categories),
          {:ok, _updated_email} <-
-           Email.update(email, %{
-             ai_summary: summary,
-             category_id: category_id,
-             confidence_score: confidence_score
-           }) do
+           Email.assign_to_category(email, category_id, summary, confidence_score) do
       {:ok, %{category_id: category_id, summary: summary}}
     else
       {:error, reason} = error ->
-        Logger.error("Failed to process email: #{inspect(reason)}")
+        Logger.error("[EMAIL_PROCESSOR] Failed to process email: #{inspect(reason)}")
         error
     end
   end
