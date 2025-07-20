@@ -6,25 +6,93 @@ defmodule SmartSort.GmailAccountHandler do
   alias SmartSort.Helpers.PersistEnv
   alias SmartSort.Accounts.ConnectedAccount
 
-  def start_watching_inbox(acc) do
-    new_acc = ensure_fresh_token(acc)
-    conn = GoogleApi.Gmail.V1.Connection.new(new_acc.access_token)
+  def start_gmail_notifications(%ConnectedAccount{} = account) do
+    account = ensure_fresh_token(account)
 
-    watch_request = %GoogleApi.Gmail.V1.Model.WatchRequest{
-      topicName: "projects/#{PersistEnv.project_id()}/topics/gmail-notifications",
-      labelIds: ["INBOX"]
-    }
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/watch"
 
-    case GoogleApi.Gmail.V1.Api.Users.gmail_users_watch(conn, "me", body: watch_request) do
-      {:ok, response} ->
-        Logger.info("Started watching Gmail inbox for #{new_acc.email}")
-        {:ok, response}
+    headers = [
+      {"Authorization", "Bearer #{account.access_token}"},
+      {"Content-Type", "application/json"}
+    ]
+
+    body =
+      Jason.encode!(%{
+        "topicName" => "projects/#{PersistEnv.project_id()}/topics/gmail-notifications",
+        "labelIds" => ["INBOX"],
+        "labelFilterAction" => "include"
+      })
+
+    case HTTPoison.post(url, body, headers) do
+      {:ok, %{status_code: 200, body: response_body}} ->
+        case Jason.decode(response_body) do
+          {:ok, %{"historyId" => history_id, "expiration" => expiration}} ->
+            if is_nil(account.last_gmail_history_id) do
+              update_last_history_id(account, history_id)
+            end
+
+            {:ok, %{history_id: history_id, expiration: expiration}}
+
+          {:error, reason} ->
+            Logger.error("Failed to parse Gmail watch response: #{inspect(reason)}")
+            {:error, "parse_failed"}
+        end
+
+      {:ok, %{status_code: status, body: body}} ->
+        Logger.error("Gmail watch failed for #{account.email}: #{status} - #{body}")
+        {:error, "http_error_#{status}"}
 
       {:error, reason} ->
-        Logger.error(
-          "Failed to start watching Gmail inbox for #{new_acc.email}: #{inspect(reason)}"
-        )
+        Logger.error("Gmail watch request failed for #{account.email}: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
 
+  def stop_gmail_notifications(%ConnectedAccount{} = account) do
+    account = ensure_fresh_token(account)
+    url = "https://gmail.googleapis.com/gmail/v1/users/me/stop"
+
+    headers = [
+      {"Authorization", "Bearer #{account.access_token}"},
+      {"Content-Type", "application/json"}
+    ]
+
+    case HTTPoison.post(url, "", headers) do
+      {:ok, %{status_code: 204}} ->
+        :ok
+
+      {:ok, %{status_code: status, body: body}} ->
+        Logger.warning("Gmail stop failed for #{account.email}: #{status} - #{body}")
+        {:error, "http_error_#{status}"}
+
+      {:error, reason} ->
+        Logger.error("Gmail stop request failed for #{account.email}: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  def start_all_gmail_notifications do
+    case ConnectedAccount.all() do
+      {:ok, accounts} ->
+        results =
+          Enum.map(accounts, fn account ->
+            case start_gmail_notifications(account) do
+              {:ok, %{expiration: expiration} = result} ->
+                {account.email, :ok, result}
+
+              {:error, reason} ->
+                {account.email, :error, reason}
+            end
+          end)
+
+        successful = Enum.count(results, fn {_, status, _} -> status == :ok end)
+        total = length(results)
+
+        Logger.info("Gmail notifications setup complete: #{successful}/#{total} accounts")
+        {:ok, results}
+
+      {:error, reason} ->
+        Logger.error("Failed to get Gmail accounts: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -46,13 +114,10 @@ defmodule SmartSort.GmailAccountHandler do
   end
 
   def refresh_access_token(acc) do
-    Logger.debug("Refreshing access token for #{acc.email}")
-
     with {:ok, response} <- make_token_request(acc.refresh_token),
          {:ok, body} <- validate_response_status(response),
          {:ok, token_data} <- parse_token_response(body),
          {:ok, updated_acc} <- update_account_tokens(acc, token_data) do
-      Logger.info("Successfully refreshed access token for #{acc.email}")
       {:ok, updated_acc, token_data.access_token}
     else
       {:error, :http_request_failed} = error ->
@@ -158,8 +223,6 @@ defmodule SmartSort.GmailAccountHandler do
            historyTypes: ["messageAdded"]
          ) do
       {:ok, %{history: history}} when is_list(history) ->
-        Logger.info("Found #{length(history)} Gmail history changes for #{acc.email}")
-
         Enum.each(history, fn history_item ->
           process_history_item(conn, acc, history_item)
         end)
@@ -338,7 +401,10 @@ defmodule SmartSort.GmailAccountHandler do
 
     with {:ok, email} <- Email.create(params) do
       categories = Category.get_all_by(%{user_id: connected_account.user_id})
-      Task.start(fn -> EmailProcessor.process_email(email, categories) end)
+
+      if not Enum.empty?(categories) do
+        Task.start(fn -> EmailProcessor.process_email(email, categories) end)
+      end
     end
   end
 

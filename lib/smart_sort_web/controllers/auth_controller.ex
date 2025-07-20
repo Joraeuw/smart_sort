@@ -7,6 +7,7 @@ defmodule SmartSortWeb.AuthController do
   alias SmartSort.Accounts
   alias SmartSort.GmailAccountHandler
   alias SmartSort.Jobs.RefreshGoogleTokens
+  alias SmartSort.Jobs.RenewGmailWatches
   alias SmartSortWeb.UserAuth
 
   def request(conn, _params) do
@@ -108,9 +109,10 @@ defmodule SmartSortWeb.AuthController do
   end
 
   defp start_gmail_watching_for_account(connected_account) do
-    case GmailAccountHandler.start_watching_inbox(connected_account) do
+    case GmailAccountHandler.start_gmail_notifications(connected_account) do
       {:ok, _response} ->
         RefreshGoogleTokens.schedule(connected_account)
+        RenewGmailWatches.schedule(connected_account)
 
       {:error, reason} ->
         Logger.error("Failed to start Gmail watching with reason: #{inspect(reason)}",

@@ -52,7 +52,7 @@ config :smart_sort, SmartSortWeb.Endpoint,
 # configured to run both http and https servers on
 # different ports.
 
-config :smart_sort, Oban, testing: :inline
+config :smart_sort, Oban, testing: :manual
 # Watch static and templates for browser reloading.
 config :smart_sort, SmartSortWeb.Endpoint,
   live_reload: [

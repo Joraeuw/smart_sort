@@ -94,8 +94,9 @@ config :smart_sort, Oban,
      ]}
   ],
   queues: [
-    default: 10,
-    scheduled: 5
+    default: 2,
+    scheduled: 2,
+    renew_gmail_watches: 2
   ]
 
 # Import environment specific config. This must remain at the bottom

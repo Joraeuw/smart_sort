@@ -17,14 +17,20 @@ defmodule SmartSort.Application do
       # Start to serve requests, typically the last entry
       {Oban, oban_config()},
       {Goth, name: SmartSort.Goth, source: {:service_account, load_service_account()}},
-      SmartSortWeb.Endpoint,
-      SmartSort.GmailAccountHandlerNotifications
+      SmartSortWeb.Endpoint
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: SmartSort.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    Task.start(fn ->
+      :timer.sleep(2000)
+      SmartSort.GmailAccountHandler.start_all_gmail_notifications()
+    end)
+
+    result
   end
 
   # Tell Phoenix to update the endpoint configuration

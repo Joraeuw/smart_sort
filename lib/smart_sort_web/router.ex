@@ -49,6 +49,11 @@ defmodule SmartSortWeb.Router do
     get "/logout", AuthController, :logout_user
   end
 
+  scope "/webhooks", SmartSortWeb do
+    pipe_through :api
+    post "/gmail", GmailWebhookController, :receive
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", SmartSortWeb do
   #   pipe_through :api
