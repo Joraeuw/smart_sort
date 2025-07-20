@@ -158,42 +158,40 @@ defmodule SmartSortWeb.DashboardComponents do
   defp category_card(assigns) do
     ~H"""
     <div id={@id} class="group">
-      <.link navigate={~p"/categories/#{@category.id}/emails"}>
-        <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
-          <div class="flex items-center space-x-4">
-            <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
-              <span class="text-white font-medium text-sm">
-                {String.first(@category.name) |> String.upcase()}
-              </span>
-            </div>
-            <div>
-              <h3 class="text-sm font-medium text-gray-900">{@category.name}</h3>
-              <p class="text-sm text-gray-500">{@category.description}</p>
-            </div>
-          </div>
-
-          <div class="flex items-center space-x-3">
-            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-              {@category.email_count} emails
+      <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+        <.link navigate={~p"/categories/#{@category.id}/emails"} class="flex items-center space-x-4 flex-1">
+          <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
+            <span class="text-white font-medium text-sm">
+              {String.first(@category.name) |> String.upcase()}
             </span>
-            <button
-              phx-click="delete_category"
-              phx-value-id={@category.id}
-              class="text-gray-400 hover:text-red-500 transition-colors"
-              onclick="return confirm('Are you sure you want to delete this category?')"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                />
-              </svg>
-            </button>
           </div>
+          <div>
+            <h3 class="text-sm font-medium text-gray-900">{@category.name}</h3>
+            <p class="text-sm text-gray-500">{@category.description}</p>
+          </div>
+        </.link>
+
+        <div class="flex items-center space-x-3">
+          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+            {@category.email_count} emails
+          </span>
+          <button
+            phx-click="delete_category"
+            phx-value-id={@category.id}
+            class="text-gray-400 hover:text-red-500 transition-colors"
+            onclick="return confirm('Are you sure you want to delete this category?')"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
+            </svg>
+          </button>
         </div>
-      </.link>
+      </div>
     </div>
     """
   end

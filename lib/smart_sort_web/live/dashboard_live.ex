@@ -39,7 +39,7 @@ defmodule SmartSortWeb.DashboardLive do
       </header>
 
     <!-- Main Content -->
-      <main class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      <main class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 text-gray-900">
         <div class="space-y-8">
           <DashboardComponents.gmail_accounts_section
             user={@user}
@@ -116,8 +116,8 @@ defmodule SmartSortWeb.DashboardLive do
   end
 
   def handle_event("delete_category", %{"id" => id}, socket) do
-    category = Category.get!(id)
-    {:ok, _category} = Category.delete(id)
+    IO.inspect("here")
+    {:ok, category} = Category.delete(id)
 
     {:noreply,
      socket

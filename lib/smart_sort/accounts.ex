@@ -3,6 +3,7 @@ defmodule SmartSort.Accounts do
   alias SmartSort.Macros.NotFound
   alias SmartSort.Repo
   alias SmartSort.Accounts.{User, ConnectedAccount}
+  alias SmartSort.Helpers.WithHelpers
 
   def get_user_connected_accounts(user_id) do
     ConnectedAccount
@@ -49,17 +50,22 @@ defmodule SmartSort.Accounts do
   end
 
   def add_email_account_to_existing_user(existing_user, auth) do
-    case ConnectedAccount.get_one_by(%{provider: "google", provider_id: auth.uid}) do
-      {:ok, %ConnectedAccount{} = secondary_connected_account} ->
-        ConnectedAccount.update(secondary_connected_account, %{
-          is_primary: false,
-          access_token: auth.credentials.token,
-          refresh_token: auth.credentials.refresh_token
-        })
+    IO.inspect(existing_user, label: "existing_user")
+    IO.inspect(auth.info.email, label: "auth.info.email")
 
-        update_connected_account_tokens(secondary_connected_account, auth)
-        {:ok, secondary_connected_account}
+    with :ok <-
+           WithHelpers.check(existing_user.email != auth.info.email, :email_already_connected),
+         {:ok, %ConnectedAccount{} = secondary_connected_account} <-
+           ConnectedAccount.get_one_by(%{provider: "google", provider_id: auth.uid}) do
+      ConnectedAccount.update(secondary_connected_account, %{
+        is_primary: false,
+        access_token: auth.credentials.token,
+        refresh_token: auth.credentials.refresh_token
+      })
 
+      update_connected_account_tokens(secondary_connected_account, auth)
+      {:ok, secondary_connected_account}
+    else
       {:error, %NotFound{}} ->
         case ConnectedAccount.get_one_by(%{user_id: existing_user.id, email: auth.info.email}) do
           {:error, %NotFound{}} ->
@@ -78,6 +84,9 @@ defmodule SmartSort.Accounts do
           {:ok, %ConnectedAccount{}} ->
             {:error, :already_connected}
         end
+
+      error ->
+        error
     end
   end
 
