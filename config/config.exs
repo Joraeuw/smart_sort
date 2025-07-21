@@ -60,13 +60,6 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-config :smart_sort, :google_api,
-  project_id: System.get_env("PROJECT_ID"),
-  client_id: System.get_env("GOOGLE_CLIENT_ID"),
-  client_secret: System.get_env("GOOGLE_CLIENT_SECRET")
-
-config :goth, json: System.get_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-
 config :ueberauth, Ueberauth,
   providers: [
     google:
@@ -79,10 +72,6 @@ config :ueberauth, Ueberauth,
          include_granted_scopes: true
        ]}
   ]
-
-config :ueberauth, Ueberauth.Strategy.Google.OAuth,
-  client_id: System.get_env("GOOGLE_CLIENT_ID"),
-  client_secret: System.get_env("GOOGLE_CLIENT_SECRET")
 
 config :smart_sort, Oban,
   repo: SmartSort.Repo,
@@ -102,7 +91,27 @@ config :smart_sort, Oban,
 config :wallaby,
   driver: Wallaby.Chrome,
   screenshot_dir: "screenshots/wallaby",
-  hackney_options: [timeout: 60_000, recv_timeout: 60_000]
+  hackney_options: [timeout: 60_000, recv_timeout: 60_000],
+  chrome_options: [
+    headless: true,
+    no_sandbox: true,
+    disable_gpu: true,
+    disable_dev_shm_usage: true,
+    disable_background_timer_throttling: true,
+    disable_backgrounding_occluded_windows: true,
+    disable_renderer_backgrounding: true,
+    disable_default_apps: true,
+    disable_extensions: true,
+    disable_plugins: true,
+    disable_sync: true,
+    disable_translate: true,
+    disable_web_security: true,
+    disable_feature: "TranslateUI",
+    disable_feature: "BlinkGenPropertyTrees",
+    disable_feature: "VizDisplayCompositor",
+    user_data_dir: "/tmp/chrome-user-data",
+    crash_dumps_dir: "/tmp/chrome-crashes"
+  ]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

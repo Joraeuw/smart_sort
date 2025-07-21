@@ -16,7 +16,6 @@ defmodule SmartSort.Application do
       # {SmartSort.Worker, arg},
       # Start to serve requests, typically the last entry
       {Oban, oban_config()},
-      {Goth, name: SmartSort.Goth, source: {:service_account, load_service_account()}},
       SmartSortWeb.Endpoint
     ]
 
@@ -43,10 +42,5 @@ defmodule SmartSort.Application do
 
   defp oban_config do
     Application.fetch_env!(:smart_sort, Oban)
-  end
-
-  defp load_service_account do
-    System.fetch_env!("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-    |> Jason.decode!()
   end
 end

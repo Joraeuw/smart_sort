@@ -10,7 +10,18 @@ defmodule SmartSort.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: [
+        smart_sort: [
+          include_executables_for: [:unix],
+          applications: [
+            runtime_tools: :permanent,
+            smart_sort: :permanent,
+            ex_unit: :permanent,
+            wallaby: :permanent
+          ]
+        ]
+      ]
     ]
   end
 
@@ -64,13 +75,12 @@ defmodule SmartSort.MixProject do
       {:httpoison, "~> 2.0"},
       {:broadway_cloud_pub_sub, "~> 0.9"},
       {:google_api_gmail, "~> 0.17"},
-      {:goth, "~> 1.4"},
       {:oban, "~> 2.19"},
       {:timex, "~> 3.7"},
       {:instructor, "~> 0.1.0"},
       {:scrivener_ecto, "~> 2.7"},
       {:html_sanitize_ex, "~> 1.4"},
-      {:wallaby, "~> 0.30"},
+      {:wallaby, "~> 0.30", runtime: true},
       {:reactor, "~> 0.15.6"},
       {:mox, "~> 1.1", only: :test}
     ]

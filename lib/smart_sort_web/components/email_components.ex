@@ -295,7 +295,7 @@ defmodule SmartSortWeb.EmailComponents do
           <!-- Email content -->
           <div class="flex-1 overflow-y-auto min-h-0">
             <div class="p-6">
-              <div class="email-body-container max-h-full">
+              <div class="email-body-container max-h-full text-gray-900">
                 <%= render_email_body(@email) %>
               </div>
             </div>
