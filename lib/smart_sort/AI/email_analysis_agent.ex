@@ -102,7 +102,7 @@ defmodule SmartSort.AI.EmailAnalysisAgent do
                  3. Unsubscribe links are typically near sender information, privacy policies, or legal text
                  4. IGNORE content links, article links, social media links, or any links in the main message content
                  5. DO NOT extract actual URLs - just provide location information
-                 6. Potential wrong links could be: "track", "track_link", "click", "analytics", "pixel", "beacon"
+                 6. Potential wrong links could be: "track", "track_link", "click", "analytics", "pixel", "beacon", "icons", "images", "logo"
 
                  EXTRACT WHAT YOU FIND:
                  - If you find clickable unsubscribe links, provide location information (link_search_text and link_context)
@@ -322,15 +322,10 @@ defmodule SmartSort.AI.EmailAnalysisAgent do
     end
   end
 
-  # New function to extract URLs from HTML links containing the search text
   defp extract_html_link_around_text(body_content, search_text) do
-    # Look for HTML links that contain the search text
     html_link_patterns = [
-      # Standard href with the text inside
       ~r/<a[^>]*href=["\']([^"']+)["\'][^>]*>.*?#{Regex.escape(search_text)}.*?<\/a>/is,
-      # Href before text with some flexibility
       ~r/<a[^>]*href=["\']([^"']+)["\'][^>]*>[^<]*#{Regex.escape(search_text)}[^<]*<\/a>/is,
-      # More flexible pattern for complex HTML
       ~r/href=["\']([^"']*unsubscribe[^"']*)["\'][^>]*>.*?#{Regex.escape(search_text)}/is
     ]
 

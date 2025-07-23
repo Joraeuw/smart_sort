@@ -6,23 +6,36 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
 
   require Logger
 
-  defmodule UnsubscribeStep do
+  defmodule SelectorStrategy do
     use Ecto.Schema
     import Ecto.Changeset
 
-    @llm_doc """
-    ## Step Field Descriptions:
-    - action_type: Type of action to perform ("click", "choose", "fill", "select", "check", "uncheck")
-    - element_type: Type of HTML element ("radio", "button", "input", "checkbox", "select", "link")
-    - tag_name: HTML tag name from the actual HTML ("input", "button", "a", "select")
-    - element_id: ID attribute if present (without #)
-    - element_class: CSS class if present (without .)
-    - element_name: Name attribute if present
-    - value: Value attribute if present (important for radio buttons)
-    - element_text: Visible text content of the element
-    - selector: Complete CSS selector to target this element
-    - description: Human-readable description of what this step does
-    """
+    @primary_key false
+    embedded_schema do
+      field :strategy_type, :string
+      field :selector, :string
+      field :description, :string
+    end
+
+    def changeset(strategy, params \\ %{}) do
+      strategy
+      |> cast(params, [:strategy_type, :selector, :description])
+      |> validate_required([:strategy_type, :selector])
+      |> validate_inclusion(:strategy_type, [
+        "id",
+        "css_name",
+        "css_type",
+        "xpath",
+        "css_class",
+        "text_content",
+        "fallback"
+      ])
+    end
+  end
+
+  defmodule UnsubscribeStep do
+    use Ecto.Schema
+    import Ecto.Changeset
 
     @primary_key false
     embedded_schema do
@@ -34,8 +47,13 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
       field :element_name, :string
       field :value, :string
       field :element_text, :string
-      field :selector, :string
       field :description, :string
+
+      embeds_many :selector_strategies, SelectorStrategy
+
+      field :data_attributes, :map
+      field :xpath_hint, :string
+      field :priority_hint, :string
     end
 
     def changeset(step, params \\ %{}) do
@@ -49,14 +67,16 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
         :element_name,
         :value,
         :element_text,
-        :selector,
-        :description
+        :data_attributes,
+        :xpath_hint,
+        :priority_hint
       ])
-      |> validate_required([:action_type, :element_type, :selector, :description])
+      |> cast_embed(:selector_strategies)
+      |> validate_required([:action_type, :element_type])
       |> validate_inclusion(:action_type, [
+        "fill",
         "click",
         "choose",
-        "fill",
         "select",
         "check",
         "uncheck"
@@ -65,6 +85,7 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
         "radio",
         "button",
         "input",
+        "textarea",
         "checkbox",
         "select",
         "link"
@@ -72,6 +93,7 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
     end
   end
 
+  # This module is used for LLM response structuring and validation, and is referenced in the analyzer logic, so it must remain.
   defmodule PageAnalysisResponse do
     use Ecto.Schema
     use Instructor
@@ -90,7 +112,7 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
 
     1. FIND ACTUAL ELEMENTS: Look at the provided HTML content and identify real elements
     2. EXTRACT DETAILS: For each element, extract:
-       - tag_name: actual HTML tag ("input", "button", "select", etc.)
+       - tag_name: actual HTML tag ("input", "button", "select", "radio", "checkbox", "link")
        - element_id: id attribute value if present
        - element_class: class attribute value if present
        - element_name: name attribute value if present
@@ -152,6 +174,82 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
       end
     end
 
+    # ✅ FIXED: Proper handling of struct-to-map conversion
+    defp validate_embedded_steps(changeset) do
+      case Ecto.Changeset.get_field(changeset, :steps) do
+        steps when is_list(steps) ->
+          Enum.reduce(steps, changeset, fn step, acc_changeset ->
+            Logger.info(
+              "[PAGE_ANALYZER] [VALIDATION] Validating step: action_type=#{inspect(step.action_type)}, element_type=#{inspect(step.element_type)}"
+            )
+
+            # Convert step struct to map for Ecto validation
+            step_params = convert_step_to_params(step)
+            step_changeset = UnsubscribeStep.changeset(%UnsubscribeStep{}, step_params)
+
+            if step_changeset.valid? do
+              acc_changeset
+            else
+              Logger.error(
+                "[PAGE_ANALYZER] [VALIDATION] Invalid step: #{inspect(step_changeset.errors)}"
+              )
+
+              Logger.error("[PAGE_ANALYZER] [VALIDATION] Step data: #{inspect(step_params)}")
+
+              Ecto.Changeset.add_error(
+                acc_changeset,
+                :steps,
+                "invalid step: #{inspect(step_changeset.errors)}"
+              )
+            end
+          end)
+
+        _ ->
+          changeset
+      end
+    end
+
+    # ✅ NEW: Convert struct to map with proper nested handling
+    defp convert_step_to_params(step) when is_struct(step) do
+      step_map = Map.from_struct(step)
+
+      # Handle selector_strategies conversion
+      case Map.get(step_map, :selector_strategies) do
+        strategies when is_list(strategies) ->
+          converted_strategies =
+            Enum.map(strategies, fn strategy ->
+              if is_struct(strategy) do
+                Map.from_struct(strategy)
+              else
+                strategy
+              end
+            end)
+
+          Map.put(step_map, :selector_strategies, converted_strategies)
+
+        _ ->
+          step_map
+      end
+    end
+
+    defp convert_step_to_params(step) when is_map(step), do: step
+
+    defp validate_steps_when_needed(changeset) do
+      status = Ecto.Changeset.get_field(changeset, :status)
+
+      if status == "needs_action" do
+        changeset
+        |> Ecto.Changeset.validate_length(:steps,
+          min: 1,
+          max: 10,
+          message: "must provide 1-10 steps when action is needed"
+        )
+        |> validate_embedded_steps()
+      else
+        changeset
+      end
+    end
+
     defp validate_embedded_steps(changeset) do
       # Validate each embedded step
       case Ecto.Changeset.get_field(changeset, :steps) do
@@ -191,7 +289,7 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
   Analyzes an unsubscribe page using HTML and optional screenshot.
   Returns analysis with status and next steps.
   """
-  def analyze_page(html_content, screenshot_base64, url, request_method) do
+  def analyze_page(html_content, screenshot_base64, url, request_method, user_email) do
     Logger.info("[PAGE_ANALYZER] Analyzing unsubscribe page: #{url}")
     Logger.info("[PAGE_ANALYZER] HTML length: #{String.length(html_content)} chars")
 
@@ -199,12 +297,16 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
       "[PAGE_ANALYZER] Screenshot: #{if screenshot_base64, do: "provided", else: "none"}"
     )
 
-    # Clean HTML content to prevent encoding errors
+    # Clean HTML content
     cleaned_html = clean_html_content(html_content)
     Logger.info("[PAGE_ANALYZER] Cleaned HTML length: #{String.length(cleaned_html)} chars")
 
-    # Always try JavaScript element discovery (not dependent on screenshot)
-    discovered_elements = discover_elements_with_javascript(url)
+    # SKIP JS discovery for now - pass empty discovery result
+    empty_discovery = %{
+      radio_buttons: [],
+      checkboxes: [],
+      save_buttons: []
+    }
 
     with {:ok, response} <-
            perform_analysis(
@@ -212,13 +314,15 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
              screenshot_base64,
              url,
              request_method,
-             discovered_elements
+             empty_discovery,
+             user_email
            ) do
       Logger.info(
         "[PAGE_ANALYZER] Analysis complete: #{response.status} (confidence: #{response.confidence_score})"
       )
 
-      log_analysis_results(response)
+      # DETAILED STEP LOGGING - This is what you want to see!
+      log_detailed_steps(response)
 
       case response.status do
         "success" ->
@@ -226,11 +330,10 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
 
         "needs_action" ->
           form_data = %{
-            url: url,
             html_content: cleaned_html,
             steps: response.steps,
             reasoning: response.reasoning,
-            discovered_elements: discovered_elements
+            discovered_elements: empty_discovery
           }
 
           {:requires_form, form_data}
@@ -248,21 +351,388 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
     end
   end
 
-  defp perform_analysis(html_content, screenshot_base64, url, request_method, discovered_elements) do
+  # DETAILED STEP LOGGING FUNCTION
+  defp log_detailed_steps(response) do
+    Logger.info("[PAGE_ANALYZER] ========================================")
+    Logger.info("[PAGE_ANALYZER] 📋 GENERATED AUTOMATION STEPS WITH MULTI-SELECTORS")
+    Logger.info("[PAGE_ANALYZER] ========================================")
+    Logger.info("[PAGE_ANALYZER] Status: #{response.status}")
+    Logger.info("[PAGE_ANALYZER] Confidence: #{response.confidence_score}")
+    Logger.info("[PAGE_ANALYZER] Reasoning: #{response.reasoning}")
+
+    if response.steps && length(response.steps) > 0 do
+      Logger.info("[PAGE_ANALYZER] Found #{length(response.steps)} automation steps:")
+
+      Enum.with_index(response.steps, 1)
+      |> Enum.each(fn {step, index} ->
+        Logger.info("[PAGE_ANALYZER] ========================================")
+
+        Logger.info(
+          "[PAGE_ANALYZER] 📌 STEP #{index}: #{String.upcase(step.action_type)} #{String.upcase(step.element_type)}"
+        )
+
+        Logger.info("[PAGE_ANALYZER]   Description: #{step.description}")
+        Logger.info("[PAGE_ANALYZER]   Element Details:")
+        Logger.info("[PAGE_ANALYZER]     - Name: #{step.element_name || "N/A"}")
+        Logger.info("[PAGE_ANALYZER]     - ID: #{step.element_id || "N/A"}")
+        Logger.info("[PAGE_ANALYZER]     - Text: #{step.element_text || "N/A"}")
+        Logger.info("[PAGE_ANALYZER]     - Value: #{step.value || "N/A"}")
+
+        # Log all selector strategies
+        if step.selector_strategies && length(step.selector_strategies) > 0 do
+          Logger.info(
+            "[PAGE_ANALYZER]   🎯 SELECTOR STRATEGIES (#{length(step.selector_strategies)} options):"
+          )
+
+          step.selector_strategies
+          |> Enum.each(fn strategy ->
+            Logger.info("[PAGE_ANALYZER]     [#{String.upcase(strategy.strategy_type)}]")
+
+            Logger.info("[PAGE_ANALYZER]        Selector: #{strategy.selector}")
+            Logger.info("[PAGE_ANALYZER]        Reason: #{strategy.description || "N/A"}")
+            Logger.info("[PAGE_ANALYZER]   ⭐ PRIMARY SELECTOR: #{strategy.selector || "NOT SET"}")
+          end)
+        else
+          Logger.info("[PAGE_ANALYZER]   ❌ NO SELECTOR STRATEGIES GENERATED!")
+        end
+
+        Logger.info("[PAGE_ANALYZER] ========================================")
+      end)
+    else
+      Logger.info("[PAGE_ANALYZER] ❌ No steps generated!")
+    end
+
+    Logger.info("[PAGE_ANALYZER] ========================================")
+  end
+
+  # Enhanced AI prompt for better step generation
+  defp build_analysis_messages(
+         html_content,
+         screenshot_base64,
+         url,
+         request_method,
+         _discovered_elements,
+         user_email
+       ) do
+    base_messages = [
+      %{
+        role: "system",
+        content: """
+        You are an expert at analyzing HTML and generating multiple robust selector strategies for web automation.
+
+        CRITICAL: For each automation step, generate MULTIPLE selector strategies in order of reliability.
+
+        ⚠️ AUTO-UNSUBSCRIBE DETECTION:
+        Sometimes, just opening the unsubscribe link is enough — no buttons, forms, or inputs.
+
+        In these cases:
+        - Scan the HTML content for clear confirmation messages like:
+        - "You have been unsubscribed"
+        - "You have successfully unsubscribed"
+        - "Your email preferences have been updated"
+        - "You will no longer receive emails"
+        - "Successfully removed from mailing list"
+        - If any such message is present and there are no actionable interactive elements, conclude the analysis early.
+        - Return **no automation steps**, and instead return:
+        - `method: "simple_http"`
+        - `success: true`
+        - `details: "Analysis completed successfully. No interactive elements were present for unsubscribing."`
+
+        SELECTOR STRATEGY TYPES (in priority order):
+        1. "id" - ID-based selectors (highest reliability)
+           Example: "#email-preferences", "#save-button"
+
+        2. "css_name" - Name attribute selectors (very reliable for forms)
+           Example: "input[name='newsletter']", "input[name='email_notifications']"
+
+        3. "css_type" - Type + attribute combinations (reliable)
+           Example: "input[type='checkbox'][name='promotions']", "button[type='submit']"
+
+        4. "xpath" - XPath with text content (good for buttons)
+           Example: "//button[text()='Save Preferences']", "//input[@name='newsletter']"
+
+        5. "css_class" - CSS class selectors (less reliable)
+           Example: ".save-button", ".checkbox-option"
+
+        6. "text_content" - Text-based selectors (fallback)
+           Example: "button:contains('Submit')", "label:contains('Unsubscribe') input"
+
+        ACTION TYPE AND ELEMENT TYPE MAPPING:
+        **CRITICAL: Use the correct action_type for each element_type:**
+
+        📋 DROPDOWN/SELECT ELEMENTS:
+        - HTML: <select><option value="too_many_emails">Too many emails</option></select>
+        - action_type: "select"
+        - element_type: "select"
+        - Description: "Select an option from dropdown"
+        - ⚠️ CRITICAL: ALWAYS use the DISPLAYED TEXT (what users see), NOT the value attribute
+        - Example: Use "Too many emails" NOT "too_many_emails"
+
+        🔘 RADIO BUTTON ELEMENTS:
+        - HTML: <input type="radio" name="preference" value="off">
+        - action_type: "choose"
+        - element_type: "radio"
+        - Description: "Choose a radio button option"
+        - Example: Choose "Off" for email notifications
+
+        ☑️ CHECKBOX ELEMENTS:
+        - HTML: <input type="checkbox" name="newsletter">
+        - action_type: "check" or "uncheck"
+        - element_type: "checkbox"
+        - Description: "Check/uncheck the checkbox"
+        - Example: Check the newsletter subscription checkbox
+
+        🔘 BUTTON ELEMENTS:
+        - HTML: <button type="submit">Save</button>
+        - action_type: "click"
+        - element_type: "button"
+        - Description: "Click the button"
+        - Example: Click the submit button
+
+        📝 INPUT FIELD ELEMENTS:
+        - HTML: <input type="text" name="email">
+        - action_type: "fill"
+        - element_type: "input"
+        - Description: "Fill the input field"
+        - Example: Fill the email address field
+
+        STEP GENERATION RULES:
+        - Generate 3-5 selector strategies per step
+        - Always analyze the actual HTML attributes
+        - Prioritize by reliability (ID first, classes last)
+        - Include xpath alternatives for complex elements
+        - Set priority numbers: 1=highest, 5=lowest
+        - **MATCH action_type to element_type correctly (select→select, choose→radio)**
+        - **FOR DROPDOWNS: Extract the text content between <option></option> tags, NOT the value attribute**
+
+        EXAMPLE OUTPUT FOR A DROPDOWN:
+        HTML: <select id="reason" name="reason_for_unsubscribing">
+          <option value="too_many_emails">Too many emails</option>
+          <option value="not_interested">Not interested anymore</option>
+        </select>
+
+        Step should have:
+        - action_type: "select"
+        - element_type: "select"
+        - value: "Too many emails" ⚠️ USE DISPLAYED TEXT, NOT "too_many_emails"
+        - selector_strategies: [
+            {
+              "strategy_type": "id",
+              "selector": "#reason",
+              "priority": 1,
+              "description": "ID selector - most reliable"
+            },
+            {
+              "strategy_type": "css_name",
+              "selector": "select[name='reason_for_unsubscribing']",
+              "priority": 2,
+              "description": "Name attribute - very stable for forms"
+            }
+          ]
+
+        EXAMPLE OUTPUT FOR A RADIO BUTTON:
+        HTML: <input type="radio" id="email-off" name="email_notifications" value="off">
+
+        Step should have:
+        - action_type: "choose" (NOT "select"!)
+        - element_type: "radio"
+        - value: "off" (the radio button value to choose)
+        - selector_strategies: [
+            {
+              "strategy_type": "id",
+              "selector": "#email-off",
+              "priority": 1,
+              "description": "ID selector - most reliable"
+            },
+            {
+              "strategy_type": "css_name",
+              "selector": "input[name='email_notifications'][value='off']",
+              "priority": 2,
+              "description": "Name and value attributes"
+            }
+          ]
+
+        VALIDATION REQUIREMENTS:
+        - action_type: "click", "choose", "fill", "select", "check", "uncheck"
+        - element_type: "radio", "button", "input", "checkbox", "select", "link"
+        - **CORRECT PAIRINGS ONLY:**
+          ✅ action="select" + element="select"
+          ✅ action="choose" + element="radio"
+          ✅ action="check" + element="checkbox"
+          ✅ action="click" + element="button"
+          ✅ action="fill" + element="input"
+        - Each step MUST have at least 2 selector strategies
+        - Strategies MUST be ordered by priority (1-5)
+        - **Each step MUST include a non-empty, human-readable `description` field explaining what the step does**
+
+        🚨 DROPDOWN VALUE RULES - CRITICAL:
+        - ❌ WRONG: value: "too_many_emails" (HTML value attribute)
+        - ✅ CORRECT: value: "Too many emails" (displayed text users see)
+        - ❌ WRONG: value: "not_interested" (HTML value attribute)
+        - ✅ CORRECT: value: "Not interested anymore" (displayed text users see)
+        - ❌ WRONG: value: "frequency_daily" (HTML value attribute)
+        - ✅ CORRECT: value: "Daily" (displayed text users see)
+
+        ALWAYS extract what's between <option>HERE</option> tags for dropdown values!
+        """
+      },
+      %{
+        role: "user",
+        content: build_multi_selector_user_content(html_content, url, request_method, user_email)
+      }
+    ]
+
+    if screenshot_base64 do
+      List.update_at(base_messages, -1, fn message ->
+        Map.update!(message, :content, fn content ->
+          [
+            %{type: "text", text: content},
+            %{type: "image_url", image_url: %{url: "data:image/png;base64,#{screenshot_base64}"}}
+          ]
+        end)
+      end)
+    else
+      base_messages
+    end
+  end
+
+  defp build_multi_selector_user_content(html_content, url, request_method, user_email) do
+    html_sample = String.slice(html_content || "", 0, 4000)
+
+    """
+    ANALYZE THIS HTML AND GENERATE MULTI-SELECTOR AUTOMATION STEPS:
+
+    URL: #{url}
+    Method: #{request_method}
+    USER EMAIL TO USE: #{user_email || "user@example.com"}
+
+
+    HTML TO ANALYZE:
+    #{html_sample}
+
+    INSTRUCTIONS:
+    1. Find all interactive elements (inputs, buttons, checkboxes, radios)
+    2. For EACH element, extract ALL available attributes:
+       - id attribute
+       - name attribute
+       - class attribute
+       - type attribute
+       - value attribute
+       - text content
+    3. Generate MULTIPLE selector strategies per element using these attributes
+    4. Order strategies by reliability (ID first, classes last)
+
+    CRITICAL INSTRUCTIONS:
+      - For email input fields, use the email: #{user_email || "user@example.com"}
+      - For name fields, use a realistic name like "John Doe"
+      - NEVER use placeholder text or generic descriptions
+      - Use REAL VALUES that can actually be filled into the form
+
+    EXPECTED ELEMENTS FOR THIS FORM:
+    - Multiple checkboxes (look for name attributes like "newsletter", "promotions", "all_emails")
+    - One submit button (look for type="submit" or button element)
+
+    For each element, create 3-5 different ways to select it, prioritized by reliability.
+    Focus on what's actually in the HTML - don't make up attributes that don't exist!
+    Generate automation steps with specific values, not placeholders!
+    """
+  end
+
+  defp build_focused_user_content(html_content, url, request_method) do
+    # Extract just the HTML we need for analysis (first 3000 chars)
+    html_sample = String.slice(html_content || "", 0, 3000)
+
+    """
+    ANALYZE THIS UNSUBSCRIBE PAGE FOR AUTOMATION STEPS:
+
+    URL: #{url}
+    Method: #{request_method}
+
+    HTML TO ANALYZE:
+    #{html_sample}
+
+    TASK:
+    1. Look for interactive elements (checkboxes, radio buttons, submit buttons)
+    2. Extract their actual attributes (name, id, type, value)
+    3. Generate precise CSS selectors based on these attributes
+    4. Create automation steps to complete unsubscription
+
+    For the test form, you should find:
+    - 3 checkboxes with names: "newsletter", "promotions", "all_emails"
+    - 1 submit button
+
+    Generate steps that will:
+    1. Check the appropriate checkbox(es) for unsubscribing
+    2. Click the submit button
+
+    Focus on creating reliable selectors from the actual HTML attributes!
+    """
+  end
+
+  # Update ExecuteFormAutomationStep to pause execution
+  defmodule SmartSort.AI_Reactor.Steps.ExecuteFormAutomationStep do
+    use Reactor.Step
+    require Logger
+
+    @impl Reactor.Step
+    def run(arguments, _context, _options) do
+      %{form_data: page_analysis, user_email: user_email} = arguments
+
+      case page_analysis.status do
+        :success ->
+          {:ok, build_success_result(page_analysis)}
+
+        :error ->
+          {:ok, build_error_result(page_analysis)}
+
+        :requires_form ->
+          {:ok, build_success_result(page_analysis)}
+      end
+    end
+
+    defp build_success_result(page_analysis) do
+      %{
+        success: true,
+        method: page_analysis[:method] || "simple_http",
+        details: page_analysis[:message] || "Simple unsubscribe completed",
+        automation_type: "simple_http",
+        timestamp: DateTime.utc_now()
+      }
+    end
+
+    defp build_error_result(page_analysis) do
+      %{
+        success: false,
+        method: "page_analysis_failed",
+        details: "Page analysis failed: #{page_analysis[:error]}",
+        error: page_analysis[:error],
+        automation_type: "failed_analysis",
+        timestamp: DateTime.utc_now()
+      }
+    end
+  end
+
+  defp perform_analysis(
+         html_content,
+         screenshot_base64,
+         url,
+         request_method,
+         discovered_elements,
+         user_email
+       ) do
     messages =
       build_analysis_messages(
         html_content,
         screenshot_base64,
         url,
         request_method,
-        discovered_elements
+        discovered_elements,
+        user_email
       )
 
     Instructor.chat_completion(
-      # Use latest GPT-4o for maximum capability in HTML parsing and vision
       model: "gpt-4o-2024-11-20",
       response_model: PageAnalysisResponse,
-      # Increased retries for better reliability
       max_retries: 3,
       messages: messages
     )
@@ -273,35 +743,44 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
          screenshot_base64,
          url,
          request_method,
-         discovered_elements
+         discovered_elements,
+         user_email
        ) do
     base_messages = [
       %{
         role: "system",
         content: """
-        You are an expert at analyzing unsubscribe pages to determine their current state and next required actions.
+        You are an expert at analyzing unsubscribe pages and generating automation steps.
 
-        Your job is to look at the HTML content and screenshot (if provided) to determine:
+        CRITICAL VALIDATION RULES:
+        1. action_type MUST be one of: "click", "choose", "fill", "select", "check", "uncheck"
+           - Use "click" for buttons and submit buttons
+           - Use "check" for checkboxes
+           - Use "choose" for radio buttons
+           - NEVER use "submit" as action_type!
 
-        STATUS OPTIONS:
-        - "success": Unsubscribe completed successfully (confirmation messages, "you've been unsubscribed")
-        - "needs_action": Page requires user interaction (buttons to click, forms to fill, choices to make)
-        - "failed": Unsubscribe failed (error messages, expired links, broken pages)
-        - "unclear": Cannot determine the current state
+        2. element_type MUST be one of: "radio", "button", "input", "checkbox", "select", "link"
+           - Use "button" for submit buttons
+           - Use "checkbox" for checkboxes
+           - NEVER use "submit" as element_type!
 
-        CRITICAL: USE JAVASCRIPT ELEMENT DISCOVERY
-        Instead of parsing HTML strings, use JavaScript to discover elements by their text content and extract reliable selectors.
-        For buttons with text like "Save", "Save Preferences", "Submit", "Unsubscribe":
-        - Find elements containing this text
-        - Extract the best selector (type="submit", id, simple class, etc.)
-        - Prefer simple, reliable selectors like button[type="submit"] over complex class chains
+        3. selector field is REQUIRED - generate the best CSS selector for each element
 
-        ANALYSIS PRIORITIES:
-        1. Look for clear success indicators first
-        2. Check for error states and broken pages
-        3. Use JavaScript to find interactive elements by text content
-        4. Extract reliable selectors from discovered elements
-        5. Use screenshot to understand visual layout and current state
+        SELECTOR GENERATION:
+        For each step, generate a specific CSS selector:
+        - Checkboxes: "input[name='newsletter']" or "input[type='checkbox'][name='newsletter']"
+        - Submit buttons: "button[type='submit']" or "#submit-button"
+        - Radio buttons: "input[name='emails'][value='off']"
+
+        EXAMPLE CORRECT STEP:
+        {
+          "action_type": "check",
+          "element_type": "checkbox",
+          "selector": "input[name='newsletter']",
+          "element_name": "newsletter",
+          "element_text": "Unsubscribe from newsletter",
+          "description": "Check the newsletter unsubscribe checkbox"
+        }
         """
       },
       %{
@@ -311,26 +790,18 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
             html_content,
             url,
             request_method,
-            discovered_elements
+            discovered_elements,
+            user_email
           )
       }
     ]
 
     if screenshot_base64 do
-      # Add screenshot to the user message if available
       List.update_at(base_messages, -1, fn message ->
         Map.update!(message, :content, fn content ->
           [
-            %{
-              type: "text",
-              text: content
-            },
-            %{
-              type: "image_url",
-              image_url: %{
-                url: "data:image/png;base64,#{screenshot_base64}"
-              }
-            }
+            %{type: "text", text: content},
+            %{type: "image_url", image_url: %{url: "data:image/png;base64,#{screenshot_base64}"}}
           ]
         end)
       end)
@@ -339,11 +810,54 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
     end
   end
 
+  defp build_enhanced_user_content(
+         html_content,
+         url,
+         request_method,
+         discovered_elements,
+         user_email
+       ) do
+    # Extract first 4000 chars of HTML for analysis
+    html_sample = String.slice(html_content || "", 0, 4000)
+
+    # Format discovered elements
+    discovery_info =
+      if has_discovered_elements?(discovered_elements) do
+        format_discovered_elements(discovered_elements)
+      else
+        "JAVASCRIPT DISCOVERY: Not available - analyze HTML directly"
+      end
+
+    """
+    ANALYZE THIS UNSUBSCRIBE PAGE:
+
+    URL: #{url}
+    Method: #{request_method}
+    My email: #{user_email}
+    HTML Sample: #{String.length(html_sample)} characters
+
+    #{discovery_info}
+
+    HTML CONTENT TO ANALYZE:
+    #{html_sample}
+
+    INSTRUCTIONS:
+    1. Look for radio buttons with "Off", "Disable", "Don't send" options
+    2. Find submit/save buttons
+    3. Extract ALL available attributes for each element
+    4. Create steps with multiple selector strategies
+    5. Assign priority hints based on selector reliability
+
+    Focus on creating steps that will work reliably with the enhanced execution engine!
+    """
+  end
+
   defp build_user_content_with_js_discovery(
          html_content,
          url,
          request_method,
-         discovered_elements
+         discovered_elements,
+         user_email
        ) do
     # Safely extract and clean text content
     safe_text_content =
@@ -369,7 +883,7 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
     - URL: #{url}
     - Request Method: #{request_method}
     - HTML Length: #{String.length(html_content)} characters
-
+    - My email: #{user_email}
     KEY TEXT CONTENT:
     #{safe_text_content}
 
@@ -532,20 +1046,47 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
       Logger.info("[PAGE_ANALYZER] [JS_DISCOVERY] Waiting for page load...")
       :timer.sleep(3000)
 
-      # Check if page loaded successfully
-      current_url = Wallaby.Browser.current_url(session)
-      Logger.info("[PAGE_ANALYZER] [JS_DISCOVERY] Current URL: #{current_url}")
-
       discovery_script = """
       try {
-        var result = { radio_buttons: [], save_buttons: [], debug_info: [] };
+        var result = {
+          radio_buttons: [],
+          checkboxes: [],        // ✅ ADD CHECKBOXES
+          submit_buttons: [],    // ✅ RENAME FROM save_buttons
+          debug_info: []
+        };
 
         result.debug_info.push('Script started');
         result.debug_info.push('Document ready state: ' + document.readyState);
-        result.debug_info.push('Total inputs: ' + document.querySelectorAll('input').length);
-        result.debug_info.push('Total buttons: ' + document.querySelectorAll('button').length);
 
-        // 1. Find ALL radio buttons first
+        // 1. Find ALL checkboxes (not just radios)
+        var allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+        result.debug_info.push('Found ' + allCheckboxes.length + ' checkboxes');
+
+        allCheckboxes.forEach(function(checkbox, index) {
+          var label = checkbox.parentElement || checkbox.nextElementSibling || checkbox.previousElementSibling;
+          var text = '';
+
+          // Try to find associated text
+          if (label && label.textContent) {
+            text = label.textContent.trim();
+          } else {
+            var parent = checkbox.parentElement;
+            while (parent && !text && parent !== document.body) {
+              text = parent.textContent.trim();
+              parent = parent.parentElement;
+            }
+          }
+
+          result.checkboxes.push({
+            selector: checkbox.name ? 'input[name="' + checkbox.name + '"]' : 'input[type="checkbox"]',
+            text: text.substring(0, 100),
+            name: checkbox.name || '',
+            id: checkbox.id || '',
+            value: checkbox.value || ''
+          });
+        });
+
+        // 2. Find ALL radio buttons
         var allRadios = document.querySelectorAll('input[type="radio"]');
         result.debug_info.push('Found ' + allRadios.length + ' radio buttons');
 
@@ -553,79 +1094,44 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
           var label = radio.parentElement || radio.nextElementSibling || radio.previousElementSibling;
           var text = '';
 
-          // Try to find associated text
           if (label && label.textContent) {
             text = label.textContent.trim();
-          } else {
-            var parent = radio.parentElement;
-            while (parent && !text && parent !== document.body) {
-              text = parent.textContent.trim();
-              parent = parent.parentElement;
-            }
           }
 
-          result.debug_info.push('Radio ' + index + ': name=' + radio.name + ', value=' + radio.value + ', text=' + text.substring(0, 50));
-
-          // Look for "off", "disable", "unsubscribe" options
-          if (text.toLowerCase().includes('off') ||
-              text.toLowerCase().includes('dont send') ||
-              text.toLowerCase().includes('disable') ||
-              text.toLowerCase().includes('unsubscribe') ||
-              radio.value.toLowerCase() === 'disabled' ||
-              radio.value.toLowerCase() === 'off' ||
-              radio.value === '0') {
-            result.radio_buttons.push({
-              selector: 'input[name="' + radio.name + '"][value="' + radio.value + '"]',
-              fallback_selector: 'input[type="radio"][value="' + radio.value + '"]',
-              text: text.substring(0, 100),
-              name: radio.name,
-              value: radio.value,
-              id: radio.id || ''
-            });
-            result.debug_info.push('[PAGE_ANALYZER] Added radio: ' + radio.name + '=' + radio.value);
-          }
-        });
-
-        // 2. Find ALL buttons and inputs
-        var allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]');
-        result.debug_info.push('Found ' + allButtons.length + ' button elements');
-
-        ['Save', 'Save Preferences', 'Submit', 'Update', 'Confirm', 'Apply'].forEach(function(searchText) {
-          Array.from(allButtons).forEach(function(el, index) {
-            var buttonText = el.textContent || el.value || '';
-            result.debug_info.push('Button ' + index + ': text="' + buttonText.substring(0, 30) + '", type=' + (el.type || 'none'));
-
-            if (buttonText.toLowerCase().includes(searchText.toLowerCase())) {
-              var selector = null;
-              if (el.type === 'submit') {
-                selector = 'button[type="submit"]';
-              } else if (el.id) {
-                selector = '#' + el.id;
-              } else if (el.className && el.className.split(' ')[0]) {
-                selector = '.' + el.className.split(' ')[0];
-              } else {
-                selector = el.tagName.toLowerCase();
-              }
-
-              result.save_buttons.push({
-                selector: selector,
-                text: buttonText.trim().substring(0, 100),
-                type: el.type || '',
-                tagName: el.tagName,
-                id: el.id || '',
-                className: el.className || ''
-              });
-              result.debug_info.push('[PAGE_ANALYZER] Added button: ' + buttonText.substring(0, 30));
-            }
+          result.radio_buttons.push({
+            selector: 'input[name="' + radio.name + '"][value="' + radio.value + '"]',
+            text: text.substring(0, 100),
+            name: radio.name,
+            value: radio.value,
+            id: radio.id || ''
           });
         });
 
-        result.debug_info.push('Final count: ' + result.radio_buttons.length + ' radios, ' + result.save_buttons.length + ' buttons');
+        // 3. Find submit buttons
+        var submitButtons = document.querySelectorAll('button[type="submit"], input[type="submit"], button');
+        result.debug_info.push('Found ' + submitButtons.length + ' buttons');
+
+        submitButtons.forEach(function(button, index) {
+          var buttonText = button.textContent || button.value || '';
+
+          result.submit_buttons.push({
+            selector: button.type === 'submit' ? 'button[type="submit"]' : (button.id ? '#' + button.id : 'button'),
+            text: buttonText.trim().substring(0, 100),
+            type: button.type || '',
+            tagName: button.tagName,
+            id: button.id || ''
+          });
+        });
+
+        result.debug_info.push('Final count: ' + result.radio_buttons.length + ' radios, ' +
+                             result.checkboxes.length + ' checkboxes, ' +
+                             result.submit_buttons.length + ' buttons');
         return result;
       } catch (error) {
         return {
           radio_buttons: [],
-          save_buttons: [],
+          checkboxes: [],
+          submit_buttons: [],
           debug_info: ['Error: ' + error.message]
         };
       }
@@ -641,31 +1147,27 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
         Logger.info("[PAGE_ANALYZER] [JS_DEBUG] #{info}")
       end)
 
-      # Safely access the result - it should be a map/object
-      radio_buttons =
-        case result do
-          %{"radio_buttons" => radios} -> radios
-          _ -> []
-        end
-
-      save_buttons =
-        case result do
-          %{"save_buttons" => buttons} -> buttons
-          _ -> []
-        end
+      # Extract results
+      radio_buttons = Map.get(result, "radio_buttons", [])
+      # ✅ ADD CHECKBOXES
+      checkboxes = Map.get(result, "checkboxes", [])
+      # ✅ RENAME
+      submit_buttons = Map.get(result, "submit_buttons", [])
 
       Logger.info(
-        "[PAGE_ANALYZER] [JS_DISCOVERY] Found #{length(radio_buttons)} radio buttons, #{length(save_buttons)} save buttons"
+        "[PAGE_ANALYZER] [JS_DISCOVERY] Found #{length(radio_buttons)} radios, #{length(checkboxes)} checkboxes, #{length(submit_buttons)} buttons"
       )
 
       %{
         radio_buttons: radio_buttons,
-        save_buttons: save_buttons
+        # ✅ INCLUDE CHECKBOXES
+        checkboxes: checkboxes,
+        submit_buttons: submit_buttons
       }
     rescue
       error ->
         Logger.warning("[PAGE_ANALYZER] [JS_DISCOVERY] Failed: #{inspect(error)}")
-        %{radio_buttons: [], save_buttons: []}
+        %{radio_buttons: [], checkboxes: [], submit_buttons: []}
     end
   end
 
@@ -709,7 +1211,24 @@ defmodule SmartSort.AI.UnsubscribePageAnalyzer do
           "DISCOVERED SAVE BUTTONS: None found"
       end
 
-    "#{radio_text}\n\n#{button_text}"
+    checkbox_text =
+      case discovered_elements.checkboxes do
+        checkboxes when is_list(checkboxes) and length(checkboxes) > 0 ->
+          checkbox_list =
+            Enum.map(checkboxes, fn checkbox ->
+              text = Map.get(checkbox, "text", "")
+              selector = Map.get(checkbox, "selector", "")
+              name = Map.get(checkbox, "name", "")
+              "- Checkbox: #{text} | Selector: #{selector} | Name: #{name}"
+            end)
+
+          "DISCOVERED CHECKBOXES:\n" <> Enum.join(checkbox_list, "\n")
+
+        _ ->
+          "DISCOVERED CHECKBOXES: None found"
+      end
+
+    "#{checkbox_text}\n\n#{radio_text}\n\n#{button_text}"
   end
 
   defp safe_slice(content, start, length) do

@@ -116,7 +116,6 @@ defmodule SmartSortWeb.DashboardLive do
   end
 
   def handle_event("delete_category", %{"id" => id}, socket) do
-    IO.inspect("here")
     {:ok, category} = Category.delete(id)
 
     {:noreply,

@@ -6,6 +6,66 @@ defmodule SmartSort.AI.FormTools.Screenshot do
 
   require Logger
 
+  def take_screenshot_with_session(session, label) do
+    Logger.info("[SCREENSHOT] Taking full-page screenshot with existing session: #{label}")
+
+    try do
+      screenshot_name = generate_screenshot_path(label)
+
+      session_with_larger_window =
+        Wallaby.Browser.resize_window(session, 1280, 2400)
+
+      session_at_top =
+        Wallaby.Browser.execute_script(session_with_larger_window, "window.scrollTo(0, 0);")
+
+      session_scrolled =
+        Wallaby.Browser.execute_script(session_at_top, """
+          // Scroll to the very bottom to ensure all content is loaded
+          window.scrollTo(0, document.body.scrollHeight);
+
+          // Wait a moment for any dynamic content to load
+          return new Promise(resolve => {
+            setTimeout(() => {
+              // Scroll back to top for the screenshot
+              window.scrollTo(0, 0);
+              resolve();
+            }, 500);
+          });
+        """)
+
+      updated_session = Wallaby.Browser.take_screenshot(session_scrolled, name: screenshot_name)
+
+      full_path = build_full_path(screenshot_name)
+
+      case File.read(full_path) do
+        {:ok, image_data} ->
+          File.rm(full_path)
+
+          screenshot_data = %{
+            label: label,
+            timestamp: DateTime.utc_now(),
+            size: byte_size(image_data),
+            data: Base.encode64(image_data),
+            filename: screenshot_name
+          }
+
+          Logger.info(
+            "[SCREENSHOT] Full-page screenshot captured successfully: #{byte_size(image_data)} bytes (1280x1200 window)"
+          )
+
+          {:ok, screenshot_data, updated_session}
+
+        {:error, reason} ->
+          Logger.error("[SCREENSHOT] Failed to read screenshot file: #{reason}")
+          {:error, "Failed to read screenshot file: #{reason}", updated_session}
+      end
+    rescue
+      error ->
+        Logger.error("[SCREENSHOT] Screenshot capture failed: #{inspect(error)}")
+        {:error, "Screenshot capture failed: #{inspect(error)}", session}
+    end
+  end
+
   @doc """
   Takes a screenshot of the given URL and returns the path to the saved image.
 
@@ -125,12 +185,11 @@ defmodule SmartSort.AI.FormTools.Screenshot do
       iex> take_full_page_screenshot("https://example.com")
       {:ok, "/tmp/wallaby_screenshots/fullpage_screenshot_1641234567890.png"}
   """
-  def take_full_page_screenshot(url) do
+  def take_full_page_screenshot(url, wallaby_session) do
     Logger.info("[SCREENSHOT] Taking FULL PAGE screenshot of: #{url}")
 
     try do
-      {:ok, session} = Wallaby.start_session()
-      session = Wallaby.Browser.visit(session, url)
+      session = Wallaby.Browser.visit(wallaby_session, url)
 
       # Wait for page to fully load
       :timer.sleep(3000)
@@ -141,17 +200,16 @@ defmodule SmartSort.AI.FormTools.Screenshot do
       screenshot_path = generate_screenshot_path("fullpage")
       session = Wallaby.Browser.take_screenshot(session, name: screenshot_path)
 
-      Wallaby.end_session(session)
       full_path = build_full_path(screenshot_path)
 
       case File.exists?(full_path) do
         true ->
           Logger.info("[SCREENSHOT] Full page screenshot saved: #{full_path}")
-          {:ok, full_path}
+          {:ok, full_path, session}
 
         false ->
           Logger.error("[SCREENSHOT] Full page screenshot file not found after capture")
-          {:error, "Screenshot file not created"}
+          {:error, "Screenshot file not created", session}
       end
     rescue
       error ->
@@ -231,13 +289,14 @@ defmodule SmartSort.AI.FormTools.Screenshot do
   @doc """
   Takes a full-page screenshot with automatic cleanup.
   """
-  def take_full_page_screenshot_with_cleanup(url, process_fn) when is_function(process_fn, 1) do
-    case take_full_page_screenshot(url) do
-      {:ok, screenshot_path} ->
+  def take_full_page_screenshot_with_cleanup(url, wallaby_session, process_fn)
+      when is_function(process_fn, 1) do
+    case take_full_page_screenshot(url, wallaby_session) do
+      {:ok, screenshot_path, changed_wallaby_session} ->
         try do
           result = process_fn.(screenshot_path)
           delete_screenshot(screenshot_path)
-          {:ok, result}
+          {:ok, result, changed_wallaby_session}
         rescue
           error ->
             delete_screenshot(screenshot_path)

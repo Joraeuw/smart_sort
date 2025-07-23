@@ -14,10 +14,67 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
   use Reactor.Step
 
   require Logger
-  alias SmartSort.AI.FormTools.Screenshot
   alias SmartSort.AI.UnsubscribePageAnalyzer
 
+  defmodule VisualVerificationResponse do
+    use Ecto.Schema
+    use Instructor
+
+    @llm_doc """
+    Analysis of a full-page screenshot to determine if an unsubscribe process was successful.
+
+    ## Field Descriptions:
+    - success: Whether the unsubscribe appears to have been successful based on visual evidence
+    - confidence: How confident you are in this assessment (high/medium/low)
+    - success_indicators: Specific text or visual elements that indicate success
+    - failure_indicators: Specific text or visual elements that indicate failure
+    - location_details: Where on the page the key indicators were found
+    - form_state: Description of any visible form elements and their states
+    - overall_assessment: Brief summary of what the page shows
+
+    Look for success indicators like:
+    - "Successfully unsubscribed" or similar messages
+    - "You have been removed from our mailing list"
+    - "Your preferences have been updated"
+    - Green checkmarks or success icons
+    - Confirmation pages or thank you messages
+
+    Look for failure indicators like:
+    - Error messages, "Failed" or "Try again" text
+    - Red error icons or text
+    - Forms still needing to be filled out
+    - Unchanged form states (wrong radio button selections)
+    """
+
+    @primary_key false
+    embedded_schema do
+      field :success, :boolean
+      field :confidence, Ecto.Enum, values: [:high, :medium, :low]
+      field :success_indicators, {:array, :string}, default: []
+      field :failure_indicators, {:array, :string}, default: []
+      field :location_details, :string
+      field :form_state, :string
+      field :overall_assessment, :string
+    end
+
+    @impl true
+    def validate_changeset(changeset) do
+      changeset
+      |> Ecto.Changeset.validate_required([:success, :confidence, :overall_assessment])
+      |> Ecto.Changeset.validate_length(:overall_assessment, min: 10, max: 200)
+    end
+  end
+
   @impl Reactor.Step
+  def run(
+        %{automation_result: %{success: true, method: "simple_http"} = automation_result},
+        _context,
+        _options
+      ) do
+    Logger.info("✅ [VERIFY_STEP] Automation already successful - skipping verification")
+    {:ok, automation_result}
+  end
+
   def run(arguments, _context, _options) do
     %{automation_result: automation_result, original_url: original_url} = arguments
 
@@ -25,8 +82,9 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
     Logger.info("🌐 Original URL: #{String.slice(original_url || "unknown", 0, 100)}")
     Logger.info("🤖 Automation success: #{automation_result.success}")
 
-    # Perform visual verification by taking a screenshot and analyzing it
-    visual_verification = perform_visual_verification(original_url, automation_result)
+    # Perform visual verification using Instructor
+    visual_verification =
+      analyze_screenshot_for_success(automation_result.final_screenshot.data, automation_result)
 
     # Build final result structure combining automation and visual verification
     final_result = build_final_result(automation_result, original_url, visual_verification)
@@ -70,111 +128,38 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
 
   # Private helper functions
 
-  defp perform_visual_verification(original_url, automation_result) do
-    Logger.info("👁️ [VERIFY_STEP] Performing visual verification...")
+  defp analyze_screenshot_for_success(base64_image, automation_result) do
+    Logger.info("[VERIFY_STEP] Analyzing screenshot for success indicators using Instructor...")
 
-    # Only try visual verification if we have a URL and automation was attempted
-    if is_binary(original_url) and String.length(original_url) > 20 do
-      case Screenshot.take_full_page_screenshot_with_cleanup(original_url, fn screenshot_path ->
-             case File.read(screenshot_path) do
-               {:ok, image_data} ->
-                 base64_image = Base.encode64(image_data)
+    content = """
+    Analyze this FULL-PAGE screenshot of an unsubscribe page to determine if the unsubscribe was successful.
 
-                 Logger.info(
-                   "[VERIFY_STEP] Full-page screenshot captured (#{byte_size(image_data)} bytes)"
-                 )
+    This screenshot captures the entire page from top to bottom, so examine all areas carefully.
 
-                 # Use AI to analyze the screenshot for success indicators
-                 analyze_screenshot_for_success(base64_image, original_url, automation_result)
+    Context:
+    - Automation reported success: #{automation_result.success}
+    - Automation method: #{automation_result.method}
 
-               {:error, reason} ->
-                 Logger.warning("[VERIFY_STEP] Failed to read screenshot: #{reason}")
-                 %{verified: false, error: "Screenshot read failed"}
-             end
-           end) do
-        {:ok, result} ->
-          Logger.info("[VERIFY_STEP] Visual verification completed")
-          result
+    Please analyze the visual content throughout the entire page and determine:
+    1. Does this page show successful unsubscribe completion anywhere?
+    2. What specific text or visual elements indicate success or failure?
+    3. Are there any confirmation messages, alerts, or status indicators?
+    4. If there are form elements visible, what state are they in?
 
-        {:error, reason} ->
-          Logger.warning("[VERIFY_STEP] Visual verification failed: #{inspect(reason)}")
-          %{verified: false, error: "Screenshot capture failed: #{inspect(reason)}"}
-      end
-    else
-      Logger.info("[VERIFY_STEP] Skipping visual verification - no valid URL")
-      %{verified: false, skipped: true, reason: "No valid URL for verification"}
-    end
-  end
+    Look carefully at:
+    - Top of page (alerts, banners, notifications)
+    - Form areas (radio button states, success messages)
+    - Bottom of page (confirmation messages)
+    - Any modal dialogs or overlays
 
-  defp analyze_screenshot_for_success(base64_image, url, automation_result) do
-    Logger.info("[VERIFY_STEP] Analyzing screenshot for success indicators...")
+    Focus on finding definitive success or failure messages anywhere on the full page.
+    """
 
-    # Use a simplified prompt focused on success detection
     messages = [
-      %{
-        role: "system",
-        content: """
-        You are analyzing a FULL-PAGE screenshot to determine if an unsubscribe process was successful.
-
-        This screenshot captures the entire page from top to bottom, so examine the whole image carefully.
-
-        Look for clear indicators of success such as:
-        - "Successfully unsubscribed" or similar messages
-        - "You have been removed from our mailing list"
-        - "Your preferences have been updated"
-        - "Email notifications disabled"
-        - "Settings saved" or "Changes applied"
-        - Green checkmarks or success icons
-        - Confirmation text indicating the action was completed
-        - Thank you messages or confirmation pages
-
-        Also look for failure indicators:
-        - Error messages anywhere on the page
-        - "Failed" or "Try again" messages
-        - Red error icons or text
-        - Forms that still need to be filled out
-        - Unchanged form states (radio buttons still in wrong position)
-
-        Since this is a full-page screenshot, success/failure messages might appear:
-        - At the top of the page (alerts/banners)
-        - Near the form elements that were interacted with
-        - At the bottom of the page
-        - In modal dialogs or popup notifications
-
-        Return a simple assessment of whether the unsubscribe appears successful based on what you can see throughout the entire page.
-        """
-      },
       %{
         role: "user",
         content: [
-          %{
-            type: "text",
-            text: """
-            Analyze this FULL-PAGE screenshot of an unsubscribe page to determine if the unsubscribe was successful.
-
-            This screenshot captures the entire page from top to bottom, so examine all areas carefully.
-
-            Context:
-            - URL: #{String.slice(url, 0, 100)}...
-            - Automation reported success: #{automation_result.success}
-            - Automation method: #{automation_result.method}
-
-            Please analyze the visual content throughout the entire page and tell me:
-            1. Does this page show successful unsubscribe completion anywhere on the page?
-            2. What specific text or visual elements indicate success or failure (and where are they located)?
-            3. Are there any confirmation messages, alerts, or status indicators?
-            4. If there are form elements visible, what state are they in?
-            5. Is this consistent with the automation result?
-
-            Look carefully at:
-            - Top of page (alerts, banners, notifications)
-            - Form areas (radio button states, success messages)
-            - Bottom of page (confirmation messages)
-            - Any modal dialogs or overlays
-
-            Focus on finding definitive success or failure messages anywhere on the full page.
-            """
-          },
+          %{type: "text", text: content},
           %{
             type: "image_url",
             image_url: %{url: "data:image/png;base64,#{base64_image}"}
@@ -183,123 +168,47 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
       }
     ]
 
-    case make_ai_request(messages) do
+    case Instructor.chat_completion(
+           model: "gpt-4o-2024-11-20",
+           response_model: VisualVerificationResponse,
+           messages: messages,
+           temperature: 0.1,
+           max_tokens: 500
+         ) do
       {:ok, analysis} ->
-        Logger.info("[VERIFY_STEP] AI visual analysis: #{String.slice(analysis, 0, 200)}...")
-        parse_success_analysis(analysis, automation_result)
+        Logger.info("[VERIFY_STEP] Visual analysis completed successfully")
+
+        Logger.info(
+          "[VERIFY_STEP] Success: #{analysis.success}, Confidence: #{analysis.confidence}"
+        )
+
+        # Convert Instructor response to our expected format
+        convert_instructor_response(analysis, automation_result)
 
       {:error, reason} ->
-        Logger.warning("[VERIFY_STEP] AI analysis failed: #{inspect(reason)}")
-        %{verified: false, error: "AI analysis failed"}
+        Logger.warning("[VERIFY_STEP] Visual analysis failed: #{inspect(reason)}")
+
+        %{
+          verified: false,
+          error: "Visual analysis failed: #{inspect(reason)}",
+          success: automation_result.success
+        }
     end
   end
 
-  defp make_ai_request(messages) do
-    try do
-      case HTTPoison.post(
-             "https://api.openai.com/v1/chat/completions",
-             Jason.encode!(%{
-               model: "gpt-4o-2024-11-20",
-               messages: messages,
-               max_tokens: 300,
-               temperature: 0.1
-             }),
-             [
-               {"Authorization", "Bearer #{System.get_env("OPENAI_API_KEY")}"},
-               {"Content-Type", "application/json"}
-             ],
-             timeout: 30_000
-           ) do
-        {:ok, %{status_code: 200, body: body}} ->
-          case Jason.decode(body) do
-            {:ok, %{"choices" => [%{"message" => %{"content" => content}} | _]}} ->
-              {:ok, content}
-
-            {:ok, response} ->
-              {:error, "Unexpected response format: #{inspect(response)}"}
-
-            {:error, reason} ->
-              {:error, "JSON decode failed: #{reason}"}
-          end
-
-        {:ok, %{status_code: status}} ->
-          {:error, "API request failed with status: #{status}"}
-
-        {:error, reason} ->
-          {:error, "Request failed: #{inspect(reason)}"}
-      end
-    rescue
-      error ->
-        {:error, "Request exception: #{inspect(error)}"}
-    end
-  end
-
-  defp parse_success_analysis(analysis_text, automation_result) do
-    # Look for success indicators in the AI response
-    analysis_lower = String.downcase(analysis_text)
-
-    success_indicators = [
-      "successfully unsubscribed",
-      "successfully removed",
-      "unsubscribe successful",
-      "preferences updated",
-      "notifications disabled",
-      "removed from list",
-      "opt out successful",
-      "successfully opted out"
-    ]
-
-    failure_indicators = [
-      "failed",
-      "error",
-      "try again",
-      "not successful",
-      "still subscribed",
-      "form needs",
-      "please complete"
-    ]
-
-    has_success =
-      Enum.any?(success_indicators, fn indicator ->
-        String.contains?(analysis_lower, indicator)
-      end)
-
-    has_failure =
-      Enum.any?(failure_indicators, fn indicator ->
-        String.contains?(analysis_lower, indicator)
-      end)
-
-    cond do
-      has_success ->
-        %{
-          verified: true,
-          success: true,
-          confidence: :high,
-          details: "Visual confirmation of successful unsubscribe",
-          ai_analysis: String.slice(analysis_text, 0, 200),
-          consistent_with_automation: automation_result.success
-        }
-
-      has_failure ->
-        %{
-          verified: true,
-          success: false,
-          confidence: :high,
-          details: "Visual indication of unsubscribe failure",
-          ai_analysis: String.slice(analysis_text, 0, 200),
-          consistent_with_automation: !automation_result.success
-        }
-
-      true ->
-        %{
-          verified: true,
-          success: automation_result.success,
-          confidence: :low,
-          details: "No clear success/failure indicators found - relying on automation result",
-          ai_analysis: String.slice(analysis_text, 0, 200),
-          consistent_with_automation: true
-        }
-    end
+  defp convert_instructor_response(analysis, automation_result) do
+    %{
+      verified: true,
+      success: analysis.success,
+      confidence: analysis.confidence,
+      details: analysis.overall_assessment,
+      success_indicators: analysis.success_indicators,
+      failure_indicators: analysis.failure_indicators,
+      location_details: analysis.location_details,
+      form_state: analysis.form_state,
+      consistent_with_automation: analysis.success == automation_result.success,
+      ai_analysis: analysis.overall_assessment
+    }
   end
 
   defp build_final_result(automation_result, original_url, visual_verification) do
@@ -368,7 +277,6 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
       %{verified: true, success: true, confidence: :high} ->
         # High confidence visual confirmation overrides automation result
         Logger.info("[VERIFY_STEP] High confidence visual success - overriding automation result")
-
         true
 
       %{verified: true, success: false, confidence: :high} ->
@@ -407,11 +315,11 @@ defmodule SmartSort.AI_Reactor.Steps.VerifyUnsubscribeSuccessStep do
     base_details = automation_result.details || "Automation completed"
 
     case visual_verification do
-      %{verified: true, success: true, details: visual_details} ->
-        "#{base_details}. Visual confirmation: #{visual_details}"
+      %{verified: true, success: true, details: details} ->
+        "#{base_details}. Visual confirmation: #{details}"
 
-      %{verified: true, success: false, details: visual_details} ->
-        "#{base_details}. Visual analysis: #{visual_details}"
+      %{verified: true, success: false, details: details} ->
+        "#{base_details}. Visual analysis: #{details}"
 
       %{verified: true, confidence: :low} ->
         "#{base_details}. Visual verification inconclusive"

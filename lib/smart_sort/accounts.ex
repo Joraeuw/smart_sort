@@ -50,9 +50,6 @@ defmodule SmartSort.Accounts do
   end
 
   def add_email_account_to_existing_user(existing_user, auth) do
-    IO.inspect(existing_user, label: "existing_user")
-    IO.inspect(auth.info.email, label: "auth.info.email")
-
     with :ok <-
            WithHelpers.check(existing_user.email != auth.info.email, :email_already_connected),
          {:ok, %ConnectedAccount{} = secondary_connected_account} <-

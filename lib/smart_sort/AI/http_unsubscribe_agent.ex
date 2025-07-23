@@ -12,15 +12,22 @@ defmodule SmartSort.AI.HttpUnsubscribeAgent do
   Executes a simple HTTP unsubscribe request.
   Takes screenshot and analyzes the response to determine next steps.
   """
-  def execute_http_unsubscribe(url) do
+  def execute_http_unsubscribe(url, wallaby_session, user_email) do
     Logger.info("[HTTP_AGENT] Starting HTTP unsubscribe for: #{url}")
-
     headers = get_default_headers()
 
     case attempt_get_request(url, headers) do
-      {:ok, result} -> {:ok, result}
-      {:requires_analysis, page_data} -> analyze_unsubscribe_page(page_data)
-      {:error, _reason} -> attempt_post_request(url, headers)
+      {:requires_analysis, page_data} ->
+        analyze_unsubscribe_page(page_data, wallaby_session, user_email)
+
+      {:error, _reason} ->
+        case attempt_post_request(url, headers) do
+          {:requires_analysis, page_data} ->
+            analyze_unsubscribe_page(page_data, wallaby_session, user_email)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -29,7 +36,7 @@ defmodule SmartSort.AI.HttpUnsubscribeAgent do
   defp attempt_get_request(url, headers) do
     Logger.info("[HTTP_AGENT] Making GET request to: #{url}")
 
-    case HTTPoison.get(url, headers, follow_redirect: true, timeout: 10_000) do
+    case HTTPoison.get(url, headers, follow_redirect: true, timeout: 10_000, max_redirect: 15) do
       {:ok, %{status_code: code, body: body, headers: response_headers}} when code in 200..299 ->
         Logger.info("[HTTP_AGENT] GET response: #{code} (#{byte_size(body)} bytes)")
 
@@ -84,34 +91,90 @@ defmodule SmartSort.AI.HttpUnsubscribeAgent do
     end
   end
 
-  defp analyze_unsubscribe_page(%{url: url, html_content: html, method: method}) do
+  defp analyze_unsubscribe_page(
+         %{url: url, html_content: html, method: method},
+         wallaby_session,
+         user_email
+       ) do
     Logger.info("[HTTP_AGENT] Analyzing unsubscribe page with screenshot...")
 
-    case Screenshot.take_full_page_screenshot_with_cleanup(url, fn screenshot_path ->
-           case File.read(screenshot_path) do
-             {:ok, image_data} ->
-               base64_image = Base.encode64(image_data)
+    case Screenshot.take_full_page_screenshot_with_cleanup(
+           url,
+           wallaby_session,
+           fn screenshot_path ->
+             case File.read(screenshot_path) do
+               {:ok, image_data} ->
+                 base64_image = Base.encode64(image_data)
 
-               Logger.info(
-                 "[HTTP_AGENT] Full-page screenshot captured (#{byte_size(image_data)} bytes)"
-               )
+                 Logger.info(
+                   "[HTTP_AGENT] Full-page screenshot captured (#{byte_size(image_data)} bytes)"
+                 )
 
-               # Send both HTML and screenshot to analyzer
-               UnsubscribePageAnalyzer.analyze_page(html, base64_image, url, method)
+                 UnsubscribePageAnalyzer.analyze_page(
+                   html,
+                   base64_image,
+                   url,
+                   method,
+                   user_email
+                 )
 
-             {:error, reason} ->
-               Logger.error("[HTTP_AGENT] Failed to read screenshot: #{reason}")
-               # Fallback to HTML-only analysis
-               UnsubscribePageAnalyzer.analyze_page(html, nil, url, method)
+               {:error, reason} ->
+                 Logger.error("[HTTP_AGENT] Failed to read screenshot: #{reason}")
+                 UnsubscribePageAnalyzer.analyze_page(html, nil, url, method, user_email)
+             end
            end
-         end) do
-      {:ok, result} ->
-        result
+         ) do
+      {:ok, result, changed_wallaby_session} ->
+        case result do
+          {:requires_form, form_data} ->
+            updated_form_data = Map.put(form_data, :wallaby_session, changed_wallaby_session)
+            {:requires_form, updated_form_data}
+
+          {:ok, success_message} ->
+            cleanup_session(changed_wallaby_session)
+            {:ok, success_message}
+
+          {:error, reason} ->
+            cleanup_session(changed_wallaby_session)
+            {:error, reason}
+
+          other_result ->
+            Logger.warning(
+              "[HTTP_AGENT] Unexpected analyzer result format: #{inspect(other_result)}"
+            )
+
+            cleanup_session(changed_wallaby_session)
+            other_result
+        end
 
       {:error, reason} ->
         Logger.error("[HTTP_AGENT] Screenshot failed: #{reason}")
-        # Fallback to HTML-only analysis
-        UnsubscribePageAnalyzer.analyze_page(html, nil, url, method)
+        fallback_result = UnsubscribePageAnalyzer.analyze_page(html, nil, url, method, user_email)
+
+        case fallback_result do
+          {:requires_form, form_data} ->
+            updated_form_data = Map.put(form_data, :wallaby_session, wallaby_session)
+            {:requires_form, updated_form_data}
+
+          other_result ->
+            other_result
+        end
+    end
+  end
+
+  defp cleanup_session(nil), do: :ok
+
+  defp cleanup_session(session) do
+    try do
+      Logger.info("[HTTP_AGENT] Cleaning up Wallaby session...")
+      Wallaby.end_session(session)
+      Logger.info("[HTTP_AGENT] Wallaby session cleaned up successfully")
+    rescue
+      error ->
+        Logger.warning("[HTTP_AGENT] Error cleaning up session: #{inspect(error)}")
+    catch
+      :exit, reason ->
+        Logger.warning("[HTTP_AGENT] Exit signal during session cleanup: #{inspect(reason)}")
     end
   end
 

@@ -82,12 +82,12 @@ defmodule SmartSort.AI.SubscriptionAgent do
   defp execute_url_unsubscribe(analysis, user_email) do
     Logger.info("[COORDINATOR] Attempting URL-based unsubscribe")
 
-    case HttpUnsubscribeAgent.execute_http_unsubscribe(analysis.unsubscribe_url) do
-      {:ok, response} ->
+    case HttpUnsubscribeAgent.execute_http_unsubscribe(analysis.unsubscribe_url, user_email) do
+      {{:ok, response}, changed_wallaby_session} ->
         Logger.info("[COORDINATOR] HTTP unsubscribe successful: #{response}")
-        {:ok, %{success: true, method: "url_simple", details: response}}
+        {:ok, %{success: true, method: "url_simple", details: response}, changed_wallaby_session}
 
-      {:requires_form, form_analysis} ->
+      {{:requires_form, form_analysis}, changed_wallaby_session} ->
         Logger.info(
           "[COORDINATOR] HTTP agent detected form requirement - delegating to FormAutomationAgent"
         )
@@ -99,14 +99,17 @@ defmodule SmartSort.AI.SubscriptionAgent do
         enhanced_analysis =
           Map.merge(form_analysis, %{
             unsubscribe_url: analysis.unsubscribe_url,
-            steps: automation_steps
+            steps: automation_steps,
+            wallaby_session: changed_wallaby_session
           })
 
         FormAutomationAgent.execute_form_automation(enhanced_analysis)
 
-      {:error, reason} ->
+      {{:error, reason}, changed_wallaby_session} ->
         Logger.error("[COORDINATOR] HTTP unsubscribe failed: #{inspect(reason)}")
-        {:ok, %{success: false, method: "url_simple", details: inspect(reason)}}
+
+        {:ok, %{success: false, method: "url_simple", details: inspect(reason)},
+         changed_wallaby_session}
     end
   end
 
